@@ -1,4 +1,5 @@
-import {MemoryPressureGuard, type HeapUsage} from "./MemoryPressure";
+import { formatInteger } from "./NumberFormat";
+import {MemoryPressureGuard, mobileBoardLimitReached, isMemoryConstrainedDevice, type HeapUsage} from "./MemoryPressure";
 import { renderQuality } from "./RenderQuality";
 import { probabilityModel } from "./MineProbability";
 import { Field } from "./Field";
@@ -54,7 +55,7 @@ export class AutoPlayer {
     );
     const updateSpeed = () => {
       renderQuality(this.field).update({ target: this.clicksPerSecond });
-      document.querySelector("#speed-value")!.textContent = String(
+      document.querySelector("#speed-value")!.textContent = formatInteger(
         this.clicksPerSecond,
       );
       localStorage.setItem("autoClickSpeed", String(this.clicksPerSecond));
@@ -132,8 +133,15 @@ export class AutoPlayer {
     }
   }
 
+  private mobileLimit() {
+    if (!isMemoryConstrainedDevice()) return false;
+    if (!mobileBoardLimitReached(this.field.cellData.numberStorage.size, this.field.clickScores.length)) return false;
+    this.pause("Paused: mobile memory safety limit reached. Saving progress. Use a desktop for larger games; reloading will not remove this limit.");
+    return true;
+  }
+
   private start() {
-    if (this.running) return;
+    if (this.running || this.mobileLimit()) return;
     this.running = true;
     renderQuality(this.field).update({
       running: true,
@@ -146,6 +154,7 @@ export class AutoPlayer {
     this.batches = 0;
     this.toggleButton.setAttribute("aria-checked", "true");
     this.playbackLabel.textContent = "Running";
+    this.status.setAttribute("class", "sr-only");
     this.status.textContent = "Auto-playing";
     this.schedule();
   }
@@ -160,6 +169,7 @@ export class AutoPlayer {
     clearTimeout(this.timer);
     this.toggleButton.setAttribute("aria-checked", "false");
     this.playbackLabel.textContent = "Paused";
+    this.status.setAttribute("class", message.startsWith("Paused:") && !message.includes("page is hidden") ? "safety-status" : "sr-only");
     this.status.textContent = message;
     if (this.actualRate) this.actualRate.textContent = "Actual 0 /s";
     if (flush) this.field.emit("playbackPaused");
@@ -168,6 +178,7 @@ export class AutoPlayer {
   private tick() {
     if (!this.running) return;
     try {
+      if (this.mobileLimit()) return;
       const now = performance.now();
       if (now - this.memoryChecked >= 1000) {
         this.memoryChecked = now;
@@ -246,7 +257,7 @@ export class AutoPlayer {
       const elapsed = performance.now() - this.rateStarted;
       if (elapsed >= 500) {
         if (this.actualRate)
-          this.actualRate.textContent = `Actual ${Math.round(((this.count - this.rateCount) * 1000) / elapsed).toLocaleString()} /s`;
+          this.actualRate.textContent = `Actual ${formatInteger(Math.round(((this.count - this.rateCount) * 1000) / elapsed))} /s`;
         this.actualRate?.setAttribute(
           "title",
           `Auto-play computation: ${Math.round((100 * this.busyMs) / elapsed)}% of wall time; ${this.batches} batches in ${Math.round(elapsed)} ms. Remaining time includes rendering, saving and scheduler waits.`,
@@ -256,7 +267,7 @@ export class AutoPlayer {
         this.rateStarted = performance.now();
         this.rateCount = this.count;
       }
-      this.status.textContent = `Auto-playing · ${this.count} clicks${this.lastGuess}`;
+      this.status.textContent = `Auto-playing · ${formatInteger(this.count)} clicks${this.lastGuess}`;
       this.schedule();
     } catch (error) {
       console.error(error);

@@ -1,7 +1,18 @@
 export class SimpleNumberStorage implements NumberStorage {
   private data: DOKFormat = {};
 
+  #cachedSize?: number;
+  public get size(): number {
+    if (this.#cachedSize === undefined) {
+      let count = 0;
+      for (const x in this.data) for (const y in this.data[x]) if (this.data[x][y] !== undefined) count++;
+      this.#cachedSize = count;
+    }
+    return this.#cachedSize;
+  }
+
   public set(x: number, y: number, value: number): void {
+    if (this.#cachedSize !== undefined && this.data[x]?.[y] === undefined) this.#cachedSize++;
     if (this.data[x] !== undefined) this.data[x]![y] = value;
     else {
       this.data[x] = {};
@@ -24,16 +35,18 @@ export class SimpleNumberStorage implements NumberStorage {
     return instance;
   }
 
-  public getAll(): { x: number; y: number; value: number }[] {
-    const output: { x: number; y: number; value: number }[] = [];
+  public *entries(): Generator<{x: number; y: number; value: number}> {
     for (const x in this.data) {
       for (const y in this.data[x]) {
-        const value = this.data[x][y];
-        output.push({ x: parseInt(x), y: parseInt(y), value });
+        yield {x: Number(x), y: Number(y), value: this.data[x][y]};
       }
     }
-    return output;
   }
+
+  public getAll(): { x: number; y: number; value: number }[] {
+    return [...this.entries()];
+  }
+
 }
 
 type DOKFormat = Record<number, Record<number, number>>;

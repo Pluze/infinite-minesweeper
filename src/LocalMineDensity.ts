@@ -1,3 +1,4 @@
+import { LoadBudget } from "./LoadingScreen";
 import { Field } from "./Field";
 import { Cell } from "./Cell";
 
@@ -6,18 +7,26 @@ export class LocalMineDensity {
   private priors = new Map<string, number>();
   private cells = new Map<string, number>();
   private buckets = new Map<string, { area: number; mines: number }>();
-  constructor(private field: Field) {
-    for (const cell of field.getAll()) this.update(cell);
+  constructor(private field: Field, deferred = false) {
+    if (!deferred) for (const cell of field.cellData.cells()) this.update(cell, false);
     field.on("cellChanged", (cell: Cell) => this.update(cell));
   }
-  private update(cell: Cell) {
+  public async initialize(signal: AbortSignal, progress: (done: number) => void) {
+    let done = 0; const budget = new LoadBudget();
+    for (const cell of this.field.cellData.cells()) {
+      this.update(cell, false);
+      if (++done % 2000 === 0 && budget.due()) {signal.throwIfAborted(); progress(done); await budget.yield();}
+    }
+    signal.throwIfAborted();
+  }
+  private update(cell: Cell, invalidate = true) {
     const key = `${cell.x},${cell.y}`;
     const previous = this.cells.get(key) ?? 0;
     const next = cell.isOpen ? (cell.isMine ? 2 : 1) : cell.isFlagged ? 2 : 0;
     if (previous === next) return;
     const bx = Math.floor(cell.x / 8),
       by = Math.floor(cell.y / 8);
-    for (let dy = -1; dy <= 1; dy++)
+    if (invalidate) for (let dy = -1; dy <= 1; dy++)
       for (let dx = -1; dx <= 1; dx++)
         this.priors.delete(`${bx + dx},${by + dy}`);
     if (next) this.cells.set(key, next);

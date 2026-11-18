@@ -1,3 +1,4 @@
+import { LoadBudget } from "./LoadingScreen";
 import { OverviewTiles, TILE_CELLS } from "./OverviewTiles";
 import { renderQuality } from "./RenderQuality";
 /**
@@ -96,6 +97,7 @@ export class FieldRenderer extends PIXI.Application {
     private field: Field,
     updateScore: (input: Field) => void,
     private fieldPersistence: FieldPersistence,
+    private deferredInitialDraw = false,
   ) {
     super();
 
@@ -188,10 +190,10 @@ export class FieldRenderer extends PIXI.Application {
   }
 
   public updateAllCells(): void {
-    this.field
-      .getAll()
-      .filter((cell) => cell.isOpen || cell.isFlagged)
-      .forEach((cell) => this.updateCell(cell, false));
+    // Stream restored cells instead of retaining multiple full-board arrays.
+    for (const cell of this.field.cellData.cells()) {
+      if (cell.isOpen || cell.isFlagged) this.updateCell(cell, false);
+    }
   }
 
   // todo inline
@@ -228,8 +230,19 @@ export class FieldRenderer extends PIXI.Application {
 
     this.stage.addChild(this.clickHandler);
 
-    this.updateAllCells();
+    if (!this.deferredInitialDraw) this.updateAllCells();
     this.overview.flush();
+  }
+
+  public async prepareCells(signal: AbortSignal, progress: (done: number) => void) {
+    let processed = 0; const budget = new LoadBudget();
+    for (const cell of this.field.cellData.cells()) {
+      if (cell.isOpen || cell.isFlagged) this.updateCell(cell, false);
+      if (++processed % 2000 === 0 && budget.due()) {
+        signal.throwIfAborted(); progress(processed); await budget.yield();
+      }
+    }
+    signal.throwIfAborted(); this.overview.flush();
   }
 
   public setupAfterCanvasReady() {

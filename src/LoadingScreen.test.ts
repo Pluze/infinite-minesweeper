@@ -1,0 +1,20 @@
+import {afterEach, expect, it, vi} from "vitest";
+import {LoadingScreen} from "./LoadingScreen";
+afterEach(() => {vi.unstubAllGlobals();});
+it('aborts pending restoration immediately before starting a replacement game', async () => {
+ const nodes:any = Object.fromEntries(['loading-screen','loading-detail','loading-progress','loading-new-game'].map(id => [id,{removeAttribute:vi.fn(),hidden:false}]));
+ vi.stubGlobal('document',{querySelector:(selector:string)=>nodes[selector.slice(1)]});
+ let finish!:()=>void;
+ const fresh = vi.fn(()=>new Promise<void>(resolve=>{finish=resolve;}));
+ const ui = new LoadingScreen(fresh);
+ ui.update('Cells',2000,10000);
+ expect(nodes['loading-progress'].value).toBe(2000);
+ expect(nodes['loading-progress'].max).toBe(10000);
+ const pending = nodes['loading-new-game'].onclick();
+ expect(ui.controller.signal.aborted).toBe(true);
+ expect(fresh).toHaveBeenCalledOnce();
+ expect(()=>ui.finish()).toThrow();
+ expect(nodes['loading-screen'].hidden).toBe(false);
+ await expect(ui.stage('Old board finished')).rejects.toThrow();
+ finish(); await pending;
+});

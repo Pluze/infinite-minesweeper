@@ -12,6 +12,12 @@ interface CellData {
 export class SimpleCellData implements CellData {
   public numberStorage = new SimpleNumberStorage();
 
+  public *cells(): Generator<Cell> {
+    for (const {x, y, value} of this.numberStorage.entries()) {
+      yield this.numberToCell(x, y, value);
+    }
+  }
+
   public getAll(): Cell[] {
     const numbers = this.numberStorage.getAll();
     return numbers.map((val) => {

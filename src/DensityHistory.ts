@@ -1,8 +1,9 @@
+import { LoadBudget } from "./LoadingScreen";
 import { Field } from "./Field";
 import { Cell } from "./Cell";
 
 /** Counts only revealed mines and flags, never hidden mine state. */
-export function trackDensity(field: Field) {
+function* initializeDensity(field: Field) {
   const cells = new Map<string, number>();
   let area = 0,
     mines = 0,
@@ -24,7 +25,11 @@ export function trackDensity(field: Field) {
     if (after) cells.set(key, after);
     else cells.delete(key);
   };
-  for (const cell of field.getAll()) update(cell);
+  let processed = 0;
+  for (const cell of field.cellData.cells()) {
+    update(cell);
+    if (++processed % 2000 === 0) yield processed;
+  }
   const density = () => (area ? mines / area : 0);
   if (!Array.isArray(field.densityHistory) || !field.densityHistory.length) {
     field.densityStartClick = Math.max(0, field.clickScores.length - 1);
@@ -58,4 +63,15 @@ export function trackDensity(field: Field) {
     field.detonatedCountHistory.push(detonated);
     field.openedCountHistory.push(opened);
   });
+}
+
+export function trackDensity(field: Field) {
+  for (const _processed of initializeDensity(field)) { /* Synchronous callers. */ }
+}
+export async function trackDensityAsync(field: Field, signal: AbortSignal, progress: (done: number) => void) {
+  const budget = new LoadBudget();
+  for (const processed of initializeDensity(field)) {
+    signal.throwIfAborted(); if (budget.due()) {progress(processed); await budget.yield();}
+  }
+  signal.throwIfAborted();
 }

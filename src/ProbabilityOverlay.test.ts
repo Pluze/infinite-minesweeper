@@ -101,4 +101,14 @@ it("draws camera changes on the board frame and retains previous visual estimate
   expect(worker.postMessage).toHaveBeenCalledTimes(1);
   rapid.emit("renderFrame", 120);
   expect(worker.postMessage).toHaveBeenCalledTimes(2);
+  // A new revision while the worker is busy must still be sent after pause.
+  rapid.emit("cellChanged", rapid.getCell(3, 0));
+  rapid.emit("renderFrame", 240);
+  expect(worker.postMessage).toHaveBeenCalledTimes(2);
+  worker.onmessage({data: {risks: [["2,0", .2]], approximate: [], groups: [["2,0"]]}});
+  rapid.emit("renderFrame", 260);
+  expect(worker.postMessage).toHaveBeenCalledTimes(3);
+  worker.onmessage({data: {risks: [["2,0", 0]], approximate: [], groups: [["2,0"]]}});
+  rapid.emit("renderFrame", 400);
+  expect(worker.postMessage).toHaveBeenCalledTimes(3);
 });

@@ -34,3 +34,12 @@ it("matches a fresh flood fill across additions, merges and removals", () => {
     }
   }
 });
+it("does not retain a separate union object for every cell in a growing region", () => {
+ const f = new Field(.2,0,"retention","1"), regions = new ConnectedRegions(f);
+ f.flag(0,0); regions.at({x:0,y:0});
+ for(let x=1;x<1000;x++) f.flag(x,0);
+ const nodes = (regions as unknown as {nodes: Map<string,unknown>}).nodes;
+ expect(nodes.size).toBe(1000);
+ expect(new Set(nodes.values()).size).toBe(1);
+ expect(regions.at({x:999,y:0})!.points.length).toBe(1000);
+});

@@ -16,6 +16,9 @@ export class ProbabilityPreview {
   private patchCells = new Map<string, {x: number; y: number}>();
   private pendingInvalidations = new Map<string, {x: number; y: number}>();
   get background() { return !!this.worker; }
+  get needsUpdate() {
+    return !this.busy && this.requested !== frontierIndex(this.field).revision;
+  }
   private groupByKey = new Map<string, number>();
   private invalidGroups = new Set<number>();
   private changed = new Map<string, { x: number; y: number }>();
@@ -57,6 +60,7 @@ export class ProbabilityPreview {
         this.worker = undefined;
         this.busy = false;
         this.requested = -1;
+        this.version++;
       };
       field.on("cellChanged", (cell: { x: number; y: number }) => {
         const key = cellKey(cell.x, cell.y);

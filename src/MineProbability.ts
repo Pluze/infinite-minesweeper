@@ -2,7 +2,7 @@ import { CellFocus } from "./CellFocus";
 import { FrontierPartitions } from "./FrontierPartitions";
 import { LocalMineDensity } from "./LocalMineDensity";
 import { regionKey } from "./MovePlanner";
-import { frontierIndex } from "./FrontierIndex";
+import { frontierIndex, prepareFrontier } from "./FrontierIndex";
 import { boardGeometry } from "./BoardGeometry";
 import { Field } from "./Field";
 import { Cell } from "./Cell";
@@ -30,8 +30,8 @@ export class MineProbability {
     risks: new Map<string, number>(),
     approximate: new Set<string>(),
   };
-  public constructor(private field: Field) {
-    this.density = new LocalMineDensity(field);
+  public constructor(private field: Field, density = new LocalMineDensity(field)) {
+    this.density = density;
     this.partitions = new FrontierPartitions(field, (x, y) => this.prior(x, y));
     field.on("clueValueChanged", () => {
       this.safe.clear(); this.focusedSafe.clear(); this.dirty = true;
@@ -263,4 +263,13 @@ export function probabilityModel(field: Field) {
     models.set(field, model);
   }
   return model;
+}
+
+export async function prepareProbability(field: Field, signal: AbortSignal, progress: (done: number, phase: string) => void) {
+  if (models.has(field)) return;
+  const density = new LocalMineDensity(field, true);
+  await density.initialize(signal, done => progress(done, "Restoring local statistics"));
+  await prepareFrontier(field, signal, progress);
+  signal.throwIfAborted();
+  models.set(field, new MineProbability(field, density));
 }

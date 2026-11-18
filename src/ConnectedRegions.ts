@@ -61,7 +61,7 @@ export class ConnectedRegions {
         let other = this.root(node);
         group = this.root(group);
         if (group === other) continue;
-        if (group.points.length < other.points.length)
+        if (group.points.length <= other.points.length)
           [group, other] = [other, group];
         other.parent = group;
         for (const point of other.points) this.append(group, point);
@@ -70,6 +70,8 @@ export class ConnectedRegions {
         other.rows.clear();
         other.occupied = new OccupiedRows();
       }
+    // Store the surviving root, not a new empty union link for every added cell.
+    this.nodes.set(keyOf(p.x, p.y), group);
   }
   public at(near: Point): Region | undefined {
     const known = frontierIndex(this.field).known;

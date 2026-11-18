@@ -1,3 +1,4 @@
+import { formatInteger } from "./NumberFormat";
 import { renderQuality } from "./RenderQuality";
 import { Field } from "./Field";
 import { HistoryIndex } from "./ScoreHistory";
@@ -127,7 +128,7 @@ export class ScorePlot {
         ...new Set([first, Math.round((first + final) / 2), final]),
       ];
       for (const tick of ticks)
-        grid += `<text x="${sx(tick)}" y="150" text-anchor="middle">${tick}</text>`;
+        grid += `<text x="${sx(tick)}" y="150" text-anchor="middle">${formatInteger(tick)}</text>`;
       let overlay = "";
       const ratios = density
         ? []
@@ -168,8 +169,8 @@ export class ScorePlot {
         const last = ratios[ratios.length - 1];
         overlay += `<circle cx="${sx(last.click)}" cy="${ry(last.score)}" r="2.5" fill="#ffaf70"/>`;
       }
-      svg.innerHTML = `<title>${density ? "Mine density" : "Score divided by opened cells"} versus clicks: ${first} to ${final}; current ${format(latest.score)}</title>${grid}${overlay}<path d="${path}" class="plot-line"/><circle cx="${sx(latest.click)}" cy="${sy(latest.score)}" r="3" fill="#a0d3c5"/><text x="${right}" y="170" text-anchor="end">Clicks</text>`;
-      summary.textContent = `${format(latest.score)}${ratios.length ? ` · ${(ratios[ratios.length - 1].score * 100).toFixed(2)}% detonated` : ""} · ${final} clicks`;
+      svg.innerHTML = `<title>${density ? "Mine density" : "Score divided by opened cells"} versus clicks: ${formatInteger(first)} to ${formatInteger(final)}; current ${format(latest.score)}</title>${grid}${overlay}<path d="${path}" class="plot-line"/><circle cx="${sx(latest.click)}" cy="${sy(latest.score)}" r="3" fill="#a0d3c5"/><text x="${right}" y="170" text-anchor="end">Clicks</text>`;
+      summary.textContent = `${format(latest.score)}${ratios.length ? ` · ${(ratios[ratios.length - 1].score * 100).toFixed(2)}% detonated` : ""} · ${formatInteger(final)} clicks`;
     };
     svg.addEventListener("pointermove", (event) => {
       const bounds = svg.getBoundingClientRect();
@@ -180,8 +181,8 @@ export class ScorePlot {
             (final - first),
       );
       tooltip.textContent = density
-        ? `Click ${click} · ${format(field.densityHistory[click - field.densityStartClick])}`
-        : `Click ${click} · ${format(calculate(field.clickScores[click], field.openedCountHistory[click - field.openedCountStartClick]))}`;
+        ? `Click ${formatInteger(click)} · ${format(field.densityHistory[click - field.densityStartClick])}`
+        : `Click ${formatInteger(click)} · ${format(calculate(field.clickScores[click], field.openedCountHistory[click - field.openedCountStartClick]))}`;
       if (!density) {
         const ratio = detonationRatio(
           field.detonatedCountHistory[click - field.detonatedCountStartClick],

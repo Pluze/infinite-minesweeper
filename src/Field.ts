@@ -233,11 +233,16 @@ export class Field extends PIXI.EventEmitter {
   }
 
   public value(x: number, y: number): number | null {
-    // returns the amount of surrounding mines
-    const cell = this.getCell(x, y);
-    // it does not make sense to request the value of a closed cell
-    if (cell.isOpen === false) return null;
-    else return this.getNeighbors(x, y).filter((cell) => cell.isMine).length;
+    const storage = this.cellData.numberStorage;
+    const encoded = storage.get(x, y);
+    if (encoded === null || !(encoded & 1)) return null;
+    let count = 0;
+    for (const [dx, dy] of this.neighborPosition) {
+      const neighbor = storage.get(x + dx, y + dy);
+      // Bit 4 denotes an ungenerated mine state, even in a legacy encoding.
+      if (neighbor !== null && (neighbor & 12) === 8) count++;
+    }
+    return count;
   }
 
   public setVisibleChunk(x: number, y: number) {

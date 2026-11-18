@@ -60,9 +60,11 @@ it("recovers from worker failure without retaining invalid group flags", () => {
   field.emit("cellChanged", field.getCell(0, 0));
   expect(preview.isInvalid("20,0")).toBe(true);
   worker.onerror?.();
+  expect(preview.needsUpdate).toBe(true);
   const snapshot = vi.spyOn(probabilityModel(field), "snapshot");
   preview.request();
   expect(snapshot).toHaveBeenCalledOnce();
+  expect(preview.needsUpdate).toBe(false);
   expect(preview.isInvalid("20,0")).toBe(false);
 });
 it('bounds hidden-overlay changes and resynchronizes the complete frontier',()=>{

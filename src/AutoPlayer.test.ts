@@ -273,7 +273,7 @@ describe("playback controls", () => {
   it("supports 65,536 clicks per second and still pauses between batches", () => {
     const { elements, click } = setup("65536");
     expect(elements.get("#auto-speed")!.value).toBe("16");
-    expect(elements.get("#speed-value")!.textContent).toBe("65536");
+    expect(elements.get("#speed-value")!.textContent).toBe("65,536");
     elements.get("#auto-toggle")!.onclick!();
     vi.advanceTimersByTime(16);
     expect(click).toHaveBeenCalledTimes(Math.floor(65536 * 0.016));
@@ -291,4 +291,19 @@ describe("playback controls", () => {
     expect(click.mock.calls.length).toBeGreaterThanOrEqual(500);
     expect(click.mock.calls.length).toBeLessThanOrEqual(512);
   });
+  it("prevents mobile growth before a click and visibly explains the saved pause", () => {
+    vi.stubGlobal("navigator", {userAgent: "iPhone EdgiOS", platform: "iPhone", maxTouchPoints: 5});
+    const {elements, click, field} = setup();
+    vi.spyOn(field.cellData.numberStorage, "size", "get").mockReturnValue(200000);
+    const save = vi.fn(); field.on("playbackPaused", save);
+    elements.get("#auto-toggle")!.onclick!();
+    vi.advanceTimersByTime(1000);
+    expect(click).not.toHaveBeenCalled();
+    expect(save).toHaveBeenCalledOnce();
+    expect(elements.get("#auto-status")!.textContent).toContain("mobile memory safety limit");
+    expect(elements.get("#auto-status")!.setAttribute).toHaveBeenCalledWith("class", "safety-status");
+    elements.get("#auto-toggle")!.onclick!();
+    expect(click).not.toHaveBeenCalled();
+  });
+
 });

@@ -1,4 +1,6 @@
-import { SaveDeltaTracker, applySaveDelta, type SaveDelta } from "./SaveDelta";
+import { isMemoryConstrainedDevice } from "./MemoryPressure";
+import { SaveDeltaTracker } from "./SaveDelta";
+import { readJournal, journalRange } from "./JournalCheckpoint";
 import { Field } from "./Field";
 import { SimpleCellData } from "./CellData";
 import { SimpleNumberStorage } from "./SimpleNumberStorage";
@@ -17,22 +19,25 @@ export class FieldPersistence {
       request.onerror = () => reject(request.error);
     }));
   }
-  public async loadLatest(id: string): Promise<Field | undefined> {
+  public async loadLatest(id: string, signal?: AbortSignal, progress?: (done: number, total: number) => void): Promise<Field | undefined> {
     if (typeof indexedDB === "undefined") return this.load(id);
     const db = await this.openDatabase();
-    const recovered = await new Promise<{text?: string; deltas: SaveDelta[]}>((resolve, reject) => {
-      const tx = db.transaction("boards"), store = tx.objectStore("boards");
-      const base = store.get(id), journal = store.getAll(this.journalRange(id));
-      tx.oncomplete = () => resolve({text: base.result, deltas: journal.result});
-      tx.onerror = () => reject(tx.error);
-    });
-    if (!recovered.text) return this.load(id);
-    const plain = JSON.parse(recovered.text) as { cellData: { numberStorage: unknown } };
-    for (const delta of recovered.deltas) applySaveDelta(plain, delta);
-    return this.decompress(plain);
+    const {board} = await readJournal(db, id, Number.MAX_SAFE_INTEGER, signal, progress);
+    signal?.throwIfAborted();
+    return board ? this.decompress(board) : this.load(id);
+  }
+  private checkpoint?: Worker;
+  private compact(id: string, through: number) {
+    // Full-board reconstruction in a second isolate can exceed iOS process memory.
+    if (isMemoryConstrainedDevice() || this.checkpoint || typeof Worker === "undefined") return;
+    const worker = new Worker(new URL("./CheckpointWorker.ts", import.meta.url), {type: "module"});
+    this.checkpoint = worker;
+    const finish = () => {worker.terminate(); this.checkpoint = undefined;};
+    worker.onmessage = finish;
+    worker.onerror = finish; // Journals remain authoritative if compaction fails.
+    worker.postMessage({id, through});
   }
   private trackers = new WeakMap<Field, {tracker: SaveDeltaTracker; initialized: boolean; sequence: number; pending: Promise<void>}>();
-  private journalRange(id: string) { return IDBKeyRange.bound([id, 0], [id, Number.MAX_SAFE_INTEGER]); }
   public async saveAsync(field: Field, id: string) {
     if (typeof indexedDB === "undefined") { this.save(field, id); return; }
     let state = this.trackers.get(field);
@@ -62,6 +67,9 @@ export class FieldPersistence {
           tx.onabort = () => reject(tx.error);
         });
         current.sequence++; snapshot.commit();
+        if (current.sequence % 128 === 0) {
+          try { this.compact(id, current.sequence - 1); } catch { /* Keep the journal on unsupported workers. */ }
+        }
       } catch (error) { snapshot.rollback(); throw error; }
     });
     current.pending = work;
@@ -72,7 +80,8 @@ export class FieldPersistence {
     await new Promise<void>((resolve, reject) => {
       const transaction = db.transaction("boards", "readwrite");
       transaction.objectStore("boards").put(text, id);
-      transaction.objectStore("boards").delete(this.journalRange(id));
+      transaction.objectStore("boards").put(crypto.randomUUID(), [id, "epoch"]);
+      transaction.objectStore("boards").delete(journalRange(id));
       transaction.oncomplete = () => resolve();
       transaction.onerror = () => reject(transaction.error);
       transaction.onabort = () => reject(transaction.error);
@@ -86,7 +95,8 @@ export class FieldPersistence {
       await new Promise<void>((resolve, reject) => {
         const transaction = db.transaction("boards", "readwrite");
         transaction.objectStore("boards").delete(id);
-        transaction.objectStore("boards").delete(this.journalRange(id));
+        transaction.objectStore("boards").put(crypto.randomUUID(), [id, "epoch"]);
+        transaction.objectStore("boards").delete(journalRange(id));
         transaction.oncomplete = () => resolve();
         transaction.onerror = () => reject(transaction.error);
       });

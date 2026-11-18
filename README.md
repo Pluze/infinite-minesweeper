@@ -39,7 +39,7 @@ The bottom-left chart shows `(revealed mines + flags) / (opened cells + unopened
 
 ## Saves and performance
 
-Board progress and recorded history are saved to IndexedDB, with migration from older localStorage saves. Settings remain in localStorage. History downsampling is not applied. Manual import/export is not available. Clearing browser data deletes the local save. After an initial checkpoint, saves append changed cells and new history samples to an IndexedDB journal. Reloading restores the checkpoint and journal; the next checkpoint compacts the journal. Saves are batched while playing and flushed on pause or page visibility changes; an abrupt browser exit can lose recent progress. Historical metrics missing from older saves begin recording when available rather than fabricating past values.
+Board progress and recorded history are saved to IndexedDB, with migration from older localStorage saves. Settings remain in localStorage. History downsampling is not applied. Manual import/export is not available. Clearing browser data deletes the local save. After an initial checkpoint, saves append changed cells and new history samples to an IndexedDB journal. Reloading restores the checkpoint and journal through a cursor. Every 128 journal writes, a background worker compacts the captured prefix without removing newer writes; failed compaction leaves the journal intact. Saves are batched while playing and flushed on pause or page visibility changes; an abrupt browser exit can lose recent progress. Historical metrics missing from older saves begin recording when available rather than fabricating past values.
 
 Incremental frontier queues, connected-component maintenance, cached constraint groups, chunked overview rendering, lazy detail sprites, and batched saves reduce work on large boards. Fast play simplifies effects without capping board rendering FPS. Auto-pan uses edge thresholds, region dwell time, cooldowns, and a temporary hold after manual camera input to reduce oscillation.
 
@@ -103,3 +103,25 @@ These measure solver variants and dependency maintenance without rendering, pers
 Offscreen detailed sprites are released and reconstructed from the unchanged board when revisited. The overview palette and probability algorithm are unchanged. Probability-update queues are capped while the overlay is hidden; reopening it performs a complete frontier synchronization instead of replaying an unbounded queue. Worker coordinate caches retain only active frontier cells.
 
 When the browser exposes heap telemetry, auto-play pauses after two consecutive readings above 85% of the heap limit (or immediately above 95%) and requests the normal save flush. The status explains the memory-pressure pause. This is a best-effort safeguard, not a guarantee against process crashes or total system memory exhaustion; browsers without this telemetry continue normally.
+
+### Mobile memory safety
+
+Mobile browsers (including iOS Edge and iPadOS desktop mode) pause automatic
+play at 200,000 stored cells or 250,000 click-history entries. This is a
+conservative growth budget, not measured available RAM and not a guarantee
+against OS termination. The pause requests a save and shows a visible notice;
+reloading does not reset the budget. Desktop games retain existing behavior.
+Mobile saves keep incremental journals without background full-board compaction,
+which would otherwise reconstruct an additional board in a worker. Initial
+rendering streams cells without creating full-board intermediate arrays; the
+appearance and loading flow are unchanged. Real-device iOS crash validation
+remains necessary.
+
+### Loading
+
+Startup reports its current stage and measured record/cell progress. Large
+statistics, clue indexes and drawing preparation yield to input in bounded
+batches. The loading screen's **Start new game** cancels restoration, clears
+the current save and camera transform, then reloads at the initial board.
+Other preferences are retained. Console `[load]` entries report stage timings.
+Displayed integer counts use comma grouping regardless of browser locale.

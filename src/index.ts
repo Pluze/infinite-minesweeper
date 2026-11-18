@@ -1,5 +1,8 @@
+import { prepareProbability } from "./MineProbability";
+import { formatInteger } from "./NumberFormat";
 import { setupMobileLayout } from "./MobileLayout";
-import { trackDensity } from "./DensityHistory";
+import { LoadingScreen } from "./LoadingScreen";
+import { trackDensityAsync } from "./DensityHistory";
 import { ScorePlot } from "./ScorePlot";
 import { Field } from "./Field";
 import { FieldRenderer } from "./FieldRenderer";
@@ -20,23 +23,29 @@ async function main() {
     const scoreElement = document.getElementById("score");
     if (scoreElement === null)
       throw Error("Could not find score element when updating score");
-    scoreElement.innerHTML = localField.score.toString();
+    scoreElement.textContent = formatInteger(localField.score);
   }
 
   const probability = 0.2;
 
-  let field: Field | undefined = await fieldStorage.loadLatest(fieldName);
+  const startFresh = async () => {
+    await fieldStorage.clearAsync(fieldName);
+    localStorage.removeItem("savedCamerTransform");
+    window.location.reload();
+  };
+  const loading = new LoadingScreen(startFresh);
+  const signal = loading.controller.signal;
+  try {
+  await loading.stage("Reading saved game…");
+  let field: Field | undefined = await fieldStorage.loadLatest(fieldName, signal, (done, total) => {
+    loading.update(`Restoring saved updates · ${formatInteger(done)} / ${formatInteger(total)}`, done, total);
+  });
+  signal.throwIfAborted();
 
   if (!field) {
     field = new Field(probability, 3, fieldName, "1");
     field.open(1, 1);
     await fieldStorage.saveAsync(field, fieldName);
-  } else {
-    console.log(
-      `loading previous field with ${
-        field.getAll().filter((cell) => cell.isOpen).length
-      } fields opened`,
-    );
   }
 
   // Existing saves predate click history: start from their current score.
@@ -44,7 +53,11 @@ async function main() {
     field.clickScores = [field.score];
   }
 
-  trackDensity(field);
+  await loading.stage("Restoring board statistics…");
+  const total = field.cellData.numberStorage.size;
+  await trackDensityAsync(field, signal, done => loading.update(`Restoring statistics · ${formatInteger(done)} / ${formatInteger(total)} cells`, done, total));
+  await loading.stage("Preparing probability indexes…");
+  await prepareProbability(field, signal, (done, phase) => loading.update(`${phase} · ${formatInteger(done)} cells`, done, total));
   self.toggleMenu = function () {
     const menu = document.getElementById("menu");
     if (menu === null)
@@ -54,10 +67,7 @@ async function main() {
 
   self.restart = async function () {
     field.emit("beforeRestart");
-    await fieldStorage.clearAsync(fieldName);
-    localStorage.clear();
-
-    window.location.reload();
+    await startFresh();
   };
 
   self.toggleFullscreen = function () {
@@ -79,14 +89,20 @@ async function main() {
   await (async () => {
     PIXI.TextureSource.defaultOptions.scaleMode = "nearest";
 
+    await loading.stage("Loading textures…");
     await loadTextures();
+    signal.throwIfAborted();
 
-    const app = new FieldRenderer(field, updateScore, fieldStorage);
+    await loading.stage("Preparing board…");
+    const app = new FieldRenderer(field, updateScore, fieldStorage, true);
+    await app.prepareCells(signal, done => loading.update(`Preparing board · ${formatInteger(done)} / ${formatInteger(total)} cells`, done, total));
+    await loading.stage("Starting display…");
     await app.init({
       resizeTo: window,
       backgroundColor: 0x0f0f0f,
     });
 
+    signal.throwIfAborted();
     document.body.appendChild(app.canvas);
 
     // We have to setup after canvas has been added to the dom because we add interactivity on the canvas element instead of using pixi interaction manager.
@@ -95,6 +111,12 @@ async function main() {
     new ScorePlot(field);
     new ScorePlot(field, true);
   })();
+  loading.finish();
+  } catch (error) {
+    if (signal.aborted) return;
+    loading.fail(error);
+    throw error;
+  }
 }
 void main().catch((error) => {
   console.error(error);

@@ -1,3 +1,4 @@
+import { formatInteger } from "./NumberFormat";
 import { OverviewRiskBins } from "./OverviewRiskBins";
 import { ProbabilityPreview } from "./ProbabilityPreview";
 import { renderQuality } from "./RenderQuality";
@@ -95,7 +96,6 @@ export class ProbabilityOverlay {
     let previewVersion = preview.version;
     const index = frontierIndex(field);
     const known = index.known;
-    let lastDataRevision = -1;
     let lastPaintRevision = -1;
     let markers: { x: number; y: number; p: number; key: string }[] = [];
     const invalid = new Set<string>();
@@ -131,8 +131,9 @@ export class ProbabilityOverlay {
         signature !== lastSignature ||
         profile.revision !== lastProfile ||
         preview.version !== previewVersion;
+      if (refreshed === -Infinity) refreshed = now;
       const refreshDue =
-        lastDataRevision !== index.revision &&
+        preview.needsUpdate &&
         now - refreshed >= quality.probabilityMs;
       if (!changed && lastPaintRevision === index.revision && !refreshDue)
         return;
@@ -163,11 +164,10 @@ export class ProbabilityOverlay {
       // A completed worker result must not trigger another request. Otherwise
       // fast worker replies bypass probabilityMs and serialize the full frontier
       // on every animation frame while auto-play changes the board.
-      if (refreshDue || lastDataRevision < 0) {
+      if (refreshDue) {
         const requestStart = performance.now();
         preview.request();
         requestMs += performance.now() - requestStart;
-        lastDataRevision = index.revision;
         refreshed = now;
       }
       if (preview.version !== previewVersion || !markers.length) {
@@ -306,7 +306,7 @@ export class ProbabilityOverlay {
                 : snapshot.risks.has(key)
                   ? "Combined clue inference"
                   : "Local density prior";
-        tooltip.textContent = `${format(p)} mine probability · ${description}  (${x}, ${y})`;
+        tooltip.textContent = `${format(p)} mine probability · ${description}  (${formatInteger(x)}, ${formatInteger(y)})`;
         tooltip.hidden = false;
         tooltip.style.left = `${Math.max(8, Math.min(width - tooltip.offsetWidth - 8, pointer.x + 16))}px`;
         tooltip.style.top = `${Math.max(8, Math.min(height - tooltip.offsetHeight - 8, pointer.y + 20))}px`;
