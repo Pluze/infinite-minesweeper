@@ -4,33 +4,28 @@ type ScrollEvent = WheelEvent & {
   momentum?: boolean;
 };
 
-// MapLibre's scroll handler identifies some wheel ticks directly and allows
-// 40 ms for a second sample when a new sequence is ambiguous.
+// Briefly sample an ambiguous vertical burst, as MapLibre does for scrolling.
 const WHEEL_DELTA = 4.000244140625;
 const SAMPLE_WINDOW_MS = 40;
-const CONTINUOUS_RATE_THRESHOLD = 200;
 const LEGACY_NOTCH = 120;
+const LARGE_VERTICAL_STEP = 64;
 
 export class WheelInput {
-  private verticalPan?: { time: number; direction: number };
-  private pending?: {
-    event: ScrollEvent;
-    timer: ReturnType<typeof setTimeout>;
-  };
+  private lastPan?: { time: number; direction: number; magnitude: number };
+  private pending: ScrollEvent[] = [];
+  private timer?: ReturnType<typeof setTimeout>;
 
   constructor(
     private apply: (action: WheelAction, event: WheelEvent) => void,
   ) {}
 
   public reset() {
-    const pending = this.takePending();
-    if (pending) clearTimeout(pending.timer);
-    this.verticalPan = undefined;
+    this.takePending();
+    this.lastPan = undefined;
   }
 
   public handle(event: ScrollEvent) {
-    // Read deltaMode first because some browsers change the units they expose
-    // based on whether the caller checks this property.
+    // Read deltaMode first because it can affect the values exposed by Firefox.
     const units = event.deltaMode;
     const { deltaX, deltaY } = event;
     if (!deltaX && !deltaY) return;
@@ -47,59 +42,79 @@ export class WheelInput {
       return;
     }
 
-    // Blink can divide the legacy 120-unit notch by devicePixelRatio before
-    // exposing it to the page. An exact scaled notch can be either device.
-    const ticks = event.wheelDeltaY;
-    const hasTicks = ticks !== undefined && ticks * deltaY < 0;
-    const matchesPointDelta = hasTicks && Math.abs(ticks + 3 * deltaY) <= 2;
-    const wholeNotch = hasTicks && this.isWheelNotch(ticks);
+    const magnitude = Math.abs(deltaY);
+    const sideways =
+      deltaX !== 0 &&
+      (!deltaY || Math.abs(deltaX) >= Math.max(1, magnitude / 8));
+    if (sideways || event.momentum) {
+      this.dispatch("pan", event);
+      return;
+    }
+
+    // A physical wheel can report pixel deltas and even the same tick ratio
+    // as a trackpad. A large vertical step is wheel evidence unless it
+    // clearly continues a recent, already identified pan.
+    const lastPan = this.lastPan;
+    const continuingPan =
+      lastPan &&
+      event.timeStamp - lastPan.time < SAMPLE_WINDOW_MS &&
+      Math.sign(deltaY) === lastPan.direction
+        ? lastPan
+        : undefined;
     if (
-      deltaX === 0 &&
-      !event.momentum &&
-      (deltaY % WHEEL_DELTA === 0 || (wholeNotch && !matchesPointDelta))
+      deltaY % WHEEL_DELTA === 0 ||
+      this.isDiscreteNotch(event) ||
+      (magnitude >= LARGE_VERTICAL_STEP &&
+        (!continuingPan || magnitude > 2 * continuingPan.magnitude))
     ) {
       this.dispatch("zoom", event);
       return;
     }
-
-    if (
-      deltaX !== 0 ||
-      event.momentum ||
-      Math.abs(deltaY) < 4 ||
-      (matchesPointDelta && !wholeNotch)
-    ) {
+    if (continuingPan) {
       this.dispatch("pan", event);
       return;
     }
 
+    if (this.pending.length) {
+      const first = this.pending[0];
+      if (
+        event.timeStamp - first.timeStamp >= SAMPLE_WINDOW_MS ||
+        Math.sign(deltaY) !== Math.sign(first.deltaY)
+      ) {
+        this.flushPending("zoom");
+      }
+    }
+    if (!this.pending.length) {
+      this.timer = setTimeout(
+        () => this.flushPending("zoom"),
+        SAMPLE_WINDOW_MS,
+      );
+    }
+
+    this.pending.push(event);
+    // A mouse tick can start with a couple of small samples before its main
+    // step. Only a sustained sequence of small vertical samples starts a pan.
     if (
-      this.verticalPan &&
-      event.timeStamp - this.verticalPan.time < SAMPLE_WINDOW_MS &&
-      Math.sign(deltaY) === this.verticalPan.direction
+      this.pending.length >= 3 &&
+      this.pending.some((sample) => !this.isWholeNotch(sample.wheelDeltaY))
     ) {
-      this.dispatch("pan", event);
-      return;
+      this.flushPending("pan");
     }
-
-    if (!this.pending) {
-      this.pending = {
-        event,
-        timer: setTimeout(() => {
-          const pending = this.takePending();
-          if (pending) this.dispatch("zoom", pending.event);
-        }, SAMPLE_WINDOW_MS),
-      };
-      return;
-    }
-
-    const gap = event.timeStamp - this.pending.event.timeStamp;
-    const continuous =
-      gap < SAMPLE_WINDOW_MS &&
-      Math.abs(deltaY * gap) < CONTINUOUS_RATE_THRESHOLD;
-    this.dispatch(continuous ? "pan" : "zoom", event);
   }
 
-  private isWheelNotch(ticks: number) {
+  private isDiscreteNotch(event: ScrollEvent) {
+    const ticks = event.wheelDeltaY;
+    return (
+      ticks !== undefined &&
+      ticks * event.deltaY < 0 &&
+      this.isWholeNotch(ticks) &&
+      Math.abs(ticks + 3 * event.deltaY) > 2
+    );
+  }
+
+  private isWholeNotch(ticks?: number) {
+    if (!ticks) return false;
+    // Blink may scale the legacy 120-unit tick by devicePixelRatio.
     const scaledNotch = LEGACY_NOTCH / (window.devicePixelRatio || 1);
     const count = Math.round(Math.abs(ticks) / scaledNotch);
     return (
@@ -109,20 +124,30 @@ export class WheelInput {
   }
 
   private takePending() {
+    clearTimeout(this.timer);
+    this.timer = undefined;
     const pending = this.pending;
-    this.pending = undefined;
+    this.pending = [];
     return pending;
   }
 
+  private flushPending(action: WheelAction) {
+    for (const event of this.takePending()) this.applyEvent(action, event);
+  }
+
   private dispatch(action: WheelAction, event: ScrollEvent) {
-    const pending = this.takePending();
-    if (pending) {
-      clearTimeout(pending.timer);
-      this.apply(action, pending.event);
-    }
-    this.verticalPan =
-      action === "pan" && event.deltaY !== 0
-        ? { time: event.timeStamp, direction: Math.sign(event.deltaY) }
+    this.flushPending(action);
+    this.applyEvent(action, event);
+  }
+
+  private applyEvent(action: WheelAction, event: ScrollEvent) {
+    this.lastPan =
+      action === "pan" && event.deltaY
+        ? {
+            time: event.timeStamp,
+            direction: Math.sign(event.deltaY),
+            magnitude: Math.abs(event.deltaY),
+          }
         : undefined;
     this.apply(action, event);
   }

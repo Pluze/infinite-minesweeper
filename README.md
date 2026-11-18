@@ -117,13 +117,10 @@ When the browser exposes heap telemetry, auto-play pauses after two consecutive 
 
 ### Mobile memory safety
 
-When a browser exposes usable heap telemetry, the measured heap budget controls
-automatic pauses, including on mobile. iOS Edge and other mobile browsers without
-heap telemetry use a fallback of 250,000 stored cells or 250,000 click-history
-entries. Stored cells include generated neighbors, so the count can be higher
-than the score or the number of clicks. The pause notice shows the applicable
-reason and requests a save in the current browser. Browser saves are not shared
-between devices, and refreshing does not reduce the size of the saved board.
+Automatic pauses for memory use the browser's reported JavaScript heap.
+Browsers without that reading, including iOS Edge, continue automatic play
+without a fixed cell or click count. Large boards still depend on how much
+memory the browser and operating system make available.
 
 Mobile saves keep incremental journals without background full-board compaction,
 which would otherwise reconstruct an additional board in a worker. Statistics

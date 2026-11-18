@@ -1,7 +1,6 @@
 import { frontierIndex } from "./FrontierIndex";
 import { probabilityModel } from "./MineProbability";
 import { describe, it, expect, afterEach, vi } from "vitest";
-import { MOBILE_CELL_LIMIT } from "./MemoryPressure";
 import { Field } from "./Field";
 import { AutoPlayer, findNumberMove } from "./AutoPlayer";
 
@@ -411,7 +410,7 @@ describe("playback controls", () => {
     });
     const { elements, click, field, setHidden } = setup();
     vi.spyOn(field.cellData.numberStorage, "size", "get").mockReturnValue(
-      MOBILE_CELL_LIMIT + 1,
+      500_000,
     );
     const usage = { usedJSHeapSize: 870, jsHeapSizeLimit: 2000 };
     Object.defineProperty(performance, "memory", {
@@ -429,37 +428,28 @@ describe("playback controls", () => {
     expect(click).toHaveBeenCalledTimes(8);
     vi.advanceTimersByTime(1000);
     expect(click).toHaveBeenCalledTimes(11);
-    expect(elements.get("#auto-status")!.textContent).toContain("87% full");
+    expect(elements.get("#auto-status")!.textContent).toBe(
+      "Paused: browser-reported heap is 87% full.",
+    );
     expect(elements.get("#playback-label")!.textContent).toBe("Paused");
   });
 
-  it("prevents mobile growth before a click and visibly explains the saved pause", () => {
+  it("keeps playing on iOS past the former board and history limits without heap telemetry", () => {
     vi.stubGlobal("navigator", {
       userAgent: "iPhone EdgiOS",
       platform: "iPhone",
       maxTouchPoints: 5,
     });
-    const { elements, click, field } = setup();
+    const { elements, click, field, setHidden } = setup();
     vi.spyOn(field.cellData.numberStorage, "size", "get").mockReturnValue(
-      MOBILE_CELL_LIMIT,
+      250_416,
     );
-    const save = vi.fn();
-    field.on("playbackPaused", save);
+    field.clickScores.length = 250_001;
     elements.get("#auto-toggle")!.onclick!();
     vi.advanceTimersByTime(1000);
-    expect(click).not.toHaveBeenCalled();
-    expect(save).toHaveBeenCalledOnce();
-    expect(elements.get("#auto-status")!.textContent).toContain(
-      "mobile memory safety limit",
-    );
-    expect(elements.get("#auto-status")!.textContent).toContain(
-      "Saving progress in this browser.",
-    );
-    expect(elements.get("#auto-status")!.setAttribute).toHaveBeenCalledWith(
-      "class",
-      "safety-status",
-    );
-    elements.get("#auto-toggle")!.onclick!();
-    expect(click).not.toHaveBeenCalled();
+    setHidden(true);
+    vi.advanceTimersByTime(1000);
+    expect(click).toHaveBeenCalledTimes(8);
+    expect(elements.get("#playback-label")!.textContent).toBe("Running");
   });
 });

@@ -12,7 +12,7 @@ export function reportedHeapFraction(heap?: HeapUsage) {
   return heap.usedJSHeapSize / heap.jsHeapSizeLimit;
 }
 
-/** Browser heap telemetry is optional; mobile browsers can use a fallback budget. */
+/** Pause only in response to usable browser-reported heap pressure. */
 export class MemoryPressureGuard {
   private highSamples = 0;
 
@@ -32,21 +32,5 @@ export function isMemoryConstrainedDevice() {
   return (
     /iPhone|iPad|iPod|Android|Mobile/i.test(navigator.userAgent) ||
     (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1)
-  );
-}
-
-// Fallback only when a mobile browser does not supply usable heap telemetry.
-export const MOBILE_CELL_LIMIT = 250_000;
-export const MOBILE_HISTORY_LIMIT = 250_000;
-
-export function mobileBoardLimitReached(
-  cells: number,
-  clicks: number,
-  heap?: HeapUsage,
-) {
-  return (
-    isMemoryConstrainedDevice() &&
-    reportedHeapFraction(heap) === undefined &&
-    (cells >= MOBILE_CELL_LIMIT || clicks >= MOBILE_HISTORY_LIMIT)
   );
 }

@@ -104,7 +104,7 @@ test("a mouse wheel zooms at the cursor, while vertical trackpad scrolling pans"
   await page.locator("#minefield").evaluate((canvas) => {
     // On Mac, Blink reports roughly three legacy units per point of continuous
     // scrolling. A fast sample can momentarily look like a mouse notch.
-    for (const deltaY of [7, 40]) {
+    for (const deltaY of [7, 9, 40]) {
       const event = new WheelEvent("wheel", {
         deltaY,
         clientX: 500,
@@ -115,7 +115,7 @@ test("a mouse wheel zooms at the cursor, while vertical trackpad scrolling pans"
       canvas.dispatchEvent(event);
     }
   });
-  await expect.poll(() => camera(page)).toEqual({ x, y: 293, k: scale });
+  await expect.poll(() => camera(page)).toEqual({ x, y: 284, k: scale });
 
   // A discrete mouse event still zooms after a trackpad scroll.
   await page.locator("#minefield").evaluate((canvas) => {
@@ -186,7 +186,8 @@ test.describe("Retina wheel ticks", () => {
     const magnified = await camera(page);
     await wheel([
       { dy: 7, ticks: -21, delay: 0 },
-      { dy: 20, ticks: -60, delay: 8 },
+      { dy: 8, ticks: -24, delay: 8 },
+      { dy: 20, ticks: -60, delay: 16 },
       { dy: 20, ticks: -60, delay: 100 },
     ]);
     await expect.poll(async () => (await camera(page)).k).toBeCloseTo(1, 6);
@@ -194,15 +195,78 @@ test.describe("Retina wheel ticks", () => {
   });
 });
 
-test("two rapid ambiguous samples pan without zooming the first sample", async ({
+test("the recorded M575S burst zooms even with trackpad-like legacy tick ratios", async ({
+  page,
+}) => {
+  await startBoard(page, { x: 400, y: 340, k: 1 });
+  // Representative mouse samples captured in macOS Edge 157.
+  const samples = [
+    [0, -12],
+    [23.1, -26],
+    [30.2, -103],
+    [45.1, -103],
+    [67.5, -206],
+  ];
+  await page.locator("#minefield").evaluate((canvas, input) => {
+    const start = performance.now();
+    for (const [delay, deltaY] of input) {
+      const event = new WheelEvent("wheel", {
+        deltaY,
+        clientX: 500,
+        clientY: 340,
+        cancelable: true,
+      });
+      Object.defineProperties(event, {
+        wheelDeltaY: { value: -3 * deltaY },
+        timeStamp: { value: start + delay },
+      });
+      canvas.dispatchEvent(event);
+    }
+  }, samples);
+  const k = 2 ** (samples.reduce((sum, [, dy]) => sum - dy, 0) * 0.002);
+  await expect.poll(async () => (await camera(page)).k).toBeCloseTo(k, 7);
+  await expect.poll(async () => (await camera(page)).y).toBeCloseTo(340, 7);
+});
+
+test("individual mouse-wheel pulses zoom despite tiny pixel deltas or horizontal noise", async ({
+  page,
+}) => {
+  await startBoard(page, { x: 400, y: 340, k: 1 });
+  const wheel = async (dx: number, dy: number, ticks: number) =>
+    page.locator("#minefield").evaluate(
+      (canvas, [deltaX, deltaY, value]) => {
+        const event = new WheelEvent("wheel", {
+          deltaX,
+          deltaY,
+          clientX: 500,
+          clientY: 340,
+          cancelable: true,
+        });
+        Object.defineProperty(event, "wheelDeltaY", { value });
+        canvas.dispatchEvent(event);
+      },
+      [dx, dy, ticks],
+    );
+  await wheel(0, -3, 9);
+  await expect
+    .poll(async () => (await camera(page)).k)
+    .toBeCloseTo(2 ** 0.006, 7);
+  await wheel(0.25, -12, 36);
+  await expect
+    .poll(async () => (await camera(page)).k)
+    .toBeCloseTo(2 ** 0.03, 7);
+});
+
+test("a burst of small vertical trackpad samples pans without zooming", async ({
   page,
 }) => {
   await startBoard(page, { x: 400, y: 340, k: 1 });
   await page.locator("#minefield").evaluate((canvas) => {
     const time = performance.now();
     for (const [delay, deltaY] of [
-      [0, 10],
-      [8, 18],
+      [0, 1],
+      [17, 2],
+      [34, 2],
     ]) {
       const event = new WheelEvent("wheel", {
         deltaY,
@@ -217,7 +281,7 @@ test("two rapid ambiguous samples pan without zooming the first sample", async (
       canvas.dispatchEvent(event);
     }
   });
-  await expect.poll(() => camera(page)).toEqual({ x: 400, y: 312, k: 1 });
+  await expect.poll(() => camera(page)).toEqual({ x: 400, y: 335, k: 1 });
 });
 
 test("mouse click tolerates jitter, drag pans, and right click flags", async ({

@@ -1,8 +1,6 @@
 import { formatInteger } from "./NumberFormat";
 import {
   MemoryPressureGuard,
-  mobileBoardLimitReached,
-  isMemoryConstrainedDevice,
   reportedHeapFraction,
   type HeapUsage,
 } from "./MemoryPressure";
@@ -21,7 +19,6 @@ export class AutoPlayer {
   private suspended = false;
   private memoryGuard = new MemoryPressureGuard();
   private memoryChecked = -Infinity;
-  private hasHeapTelemetry = false;
   private wakeGeneration = 0;
   private channel =
     typeof window !== "undefined" && typeof MessageChannel !== "undefined"
@@ -202,30 +199,16 @@ export class AutoPlayer {
   }
 
   private checkMemory(now: number, starting = false) {
-    if (starting || now - this.memoryChecked >= 1000) {
-      this.memoryChecked = now;
-      const heap = (performance as Performance & { memory?: HeapUsage }).memory;
-      const fraction = reportedHeapFraction(heap);
-      this.hasHeapTelemetry = fraction !== undefined;
-      if (this.memoryGuard.check(heap) && fraction !== undefined) {
-        this.pause(
-          `Paused: browser-reported heap is ${formatInteger(100 * fraction)}% full. Saving progress in this browser.`,
-        );
-        return true;
-      }
-    }
-
-    if (!this.hasHeapTelemetry && isMemoryConstrainedDevice()) {
-      const cells = this.field.cellData.numberStorage.size;
-      const clicks = this.field.clickScores.length;
-      if (mobileBoardLimitReached(cells, clicks)) {
-        this.pause(
-          `Paused: mobile memory safety limit reached (${formatInteger(cells)} stored cells, ${formatInteger(clicks)} clicks). This browser does not report heap usage. Saving progress in this browser.`,
-        );
-        return true;
-      }
-    }
-    return false;
+    if (!starting && now - this.memoryChecked < 1000) return false;
+    this.memoryChecked = now;
+    const heap = (performance as Performance & { memory?: HeapUsage }).memory;
+    if (!this.memoryGuard.check(heap)) return false;
+    const fraction = reportedHeapFraction(heap);
+    if (fraction === undefined) return false;
+    this.pause(
+      `Paused: browser-reported heap is ${formatInteger(100 * fraction)}% full.`,
+    );
+    return true;
   }
 
   private start() {

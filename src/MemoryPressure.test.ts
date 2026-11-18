@@ -2,9 +2,6 @@ import { expect, it, vi, afterEach } from "vitest";
 import {
   MemoryPressureGuard,
   isMemoryConstrainedDevice,
-  mobileBoardLimitReached,
-  MOBILE_CELL_LIMIT,
-  MOBILE_HISTORY_LIMIT,
 } from "./MemoryPressure";
 it("does not pause unsupported browsers or a transient heap spike", () => {
   const guard = new MemoryPressureGuard();
@@ -30,32 +27,18 @@ it.each([
   { userAgent: "Mozilla iPhone EdgiOS", platform: "iPhone", maxTouchPoints: 5 },
   { userAgent: "Mozilla Macintosh", platform: "MacIntel", maxTouchPoints: 5 },
   { userAgent: "Mozilla Android", platform: "Linux", maxTouchPoints: 5 },
-])("protects mobile browsers without heap telemetry: %o", (platform) => {
-  vi.stubGlobal("navigator", platform);
-  expect(isMemoryConstrainedDevice()).toBe(true);
-  expect(
-    mobileBoardLimitReached(MOBILE_CELL_LIMIT - 1, MOBILE_HISTORY_LIMIT - 1),
-  ).toBe(false);
-  expect(mobileBoardLimitReached(MOBILE_CELL_LIMIT, 0)).toBe(true);
-  expect(mobileBoardLimitReached(0, MOBILE_HISTORY_LIMIT)).toBe(true);
-  expect(
-    mobileBoardLimitReached(MOBILE_CELL_LIMIT, MOBILE_HISTORY_LIMIT, {
-      usedJSHeapSize: 0,
-      jsHeapSizeLimit: 0,
-    }),
-  ).toBe(true);
-  expect(
-    mobileBoardLimitReached(MOBILE_CELL_LIMIT, MOBILE_HISTORY_LIMIT, {
-      usedJSHeapSize: 50,
-      jsHeapSizeLimit: 100,
-    }),
-  ).toBe(false);
-});
-it("does not impose mobile limits on desktops", () => {
+])(
+  "identifies mobile browsers, including iPads in desktop mode: %o",
+  (platform) => {
+    vi.stubGlobal("navigator", platform);
+    expect(isMemoryConstrainedDevice()).toBe(true);
+  },
+);
+it("distinguishes desktop Macs from iPads in desktop mode", () => {
   vi.stubGlobal("navigator", {
     userAgent: "Mozilla Macintosh",
     platform: "MacIntel",
     maxTouchPoints: 0,
   });
-  expect(mobileBoardLimitReached(2000000, 2000000)).toBe(false);
+  expect(isMemoryConstrainedDevice()).toBe(false);
 });
