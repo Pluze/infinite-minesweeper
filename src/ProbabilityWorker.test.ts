@@ -1,0 +1,21 @@
+import { afterEach, expect, it, vi } from "vitest";
+afterEach(() => { vi.unstubAllGlobals(); });
+it("applies frontier patches without dropping untouched components", async () => {
+  const scope = {onmessage: undefined as any, postMessage: vi.fn()};
+  vi.stubGlobal("self", scope);
+  await import("./ProbabilityWorker");
+  scope.onmessage({data: {updates: [["0,0", {cells: ["1,0", "2,0"], mines: 0}]], prior: .2, bucketPriors: [["0,0", .2]]}});
+  expect(new Map(scope.postMessage.mock.calls.at(-1)![0].risks).get("1,0")).toBe(0);
+  scope.onmessage({data: {updates: [["100,0", {cells: ["101,0", "102,0"], mines: 1}]], prior: .2, bucketPriors: [["12,0", .2]]}});
+  const result = new Map(scope.postMessage.mock.calls.at(-1)![0].risks);
+  expect(result.get("1,0")).toBe(0);
+  expect(result.get("101,0")).toBe(.5);
+  scope.onmessage({data: {updates: [["0,0", null]], prior: .2, bucketPriors: []}});
+  const last = new Map(scope.postMessage.mock.calls.at(-1)![0].risks);
+  expect(last.has("1,0")).toBe(false);
+  expect(last.get("101,0")).toBe(.5);
+  scope.onmessage({data: {reset:true, updates:[["200,0",{cells:["201,0"],mines:1}]],prior:.2,bucketPriors:[]}});
+  const reset = new Map(scope.postMessage.mock.calls.at(-1)![0].risks);
+  expect(reset.has("101,0")).toBe(false);
+  expect(reset.get("201,0")).toBe(1);
+});

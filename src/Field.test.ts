@@ -24,7 +24,7 @@ test("JSON", () => {
 
   const output = JSON.stringify(input);
 
-  expect(output).toMatchSnapshot();
+  expect(output).toBe('{"foo":"hello","bar":"world"}');
   expect(JSON.parse(output)).toStrictEqual(input);
 });
 

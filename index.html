@@ -1,128 +1,137 @@
 <!doctype html>
-<html>
+<html lang="en">
   <head>
     <meta charset="utf-8" />
-    <title>Minefield</title>
-    <style>
-      html,
-      body {
-        margin: 0;
-        padding: 0;
-        overflow: hidden;
-        background-color: #0f0f0f;
-        touch-action: none;
-      }
-
-      img,
-      canvas {
-        image-rendering: pixelated;
-        image-rendering: -moz-crisp-edges;
-        image-rendering: -o-crisp-edges;
-        image-rendering: optimize-contrast;
-        -ms-interpolation-mode: nearest-neighbor;
-      }
-
-      canvas,
-      .ui {
-        -webkit-touch-callout: none;
-        -webkit-user-select: none;
-        -khtml-user-select: none;
-        -moz-user-select: none;
-        -ms-user-select: none;
-        user-select: none;
-      }
-
-      @font-face {
-        font-family: "silkscreen";
-        src: url("../assets/fonts/silkscreen.ttf") format("truetype");
-      }
-
-      .container {
-        display: flex;
-        flex-direction: column;
-        align-items: flex-start;
-        position: absolute;
-        top: 2px;
-        left: 2px;
-      }
-
-      .ui {
-        font-family: "silkscreen";
-        font-size: 16px;
-        background-color: #292929;
-        padding: 2px;
-        color: lightgray;
-        zoom: 2;
-      }
-
-      .menubutton {
-        width: 3em;
-        height: 3em;
-        border: 2px solid darkgray;
-      }
-
-      .menubutton > img {
-        image-rendering: pixelated;
-        width: 100%;
-        filter: brightness(2);
-      }
-
-      .menu {
-        display: none;
-        border: 2px solid darkgray;
-      }
-
-      .menu button {
-        font-family: "silkscreen";
-        font-size: 16px;
-        background-color: Transparent;
-        padding: 2px;
-        color: lightgray;
-      }
-
-      a {
-        color: dodgerblue;
-      }
-
-      #score {
-        display: inline;
-      }
-
-      p {
-        margin: 0.2em 0;
-      }
-
-      hr {
-        border: 0;
-        height: 0;
-        border-top: 1px solid rgba(0, 0, 0, 0.1);
-        border-bottom: 1px solid rgba(255, 255, 255, 0.3);
-      }
-    </style>
+    <title>Infinite Minesweeper · Auto Explorer</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <link rel="stylesheet" href="/src/css/stylesheet.css" />
   </head>
   <body>
-    <div class="container">
-      <button onclick="toggleMenu()" class="menubutton ui">
-        <img alt="menu button" id="menubutton" src="/menubutton.png" />
+    <header class="brand-bar">
+      <button
+        class="menu-trigger"
+        onclick="toggleMenu()"
+        aria-label="Open menu"
+      >
+        ☰
       </button>
-      <div class="menu ui" id="menu">
-        <div><a href="https://discord.gg/XzpSVxx">Discord</a></div>
-        <div>
-          <a href="https://github.com/Zikoat/infinite-minesweeper"
-            >Source code</a
-          >
-        </div>
-        <!-- todo add settings -->
-        <div>Score:<span id="score"></span></div>
-        <div>
-          <button onclick="restart()">restart</button><br />
-          <button onclick="toggleFullscreen()">Toggle Fullscreen</button>
-        </div>
-        <hr />
-        <div>Zoom: Ctrl +</div>
-        <div>Keyboard controls:<br />arrow keys and z/x</div>
+      <span class="brand">Infinite Minesweeper</span
+      ><span class="brand-divider"></span
+      ><span class="score-label">Score <b id="score">0</b></span>
+      <div id="menu" style="display: none">
+        <button onclick="restart()">New game</button>
+        <button onclick="toggleFullscreen()">Fullscreen</button>
+        <a
+          href="https://github.com/Pluze/infinite-minesweeper"
+          target="_blank"
+          rel="noreferrer"
+          >Source code ↗</a
+        >
       </div>
-    </div>
+    </header>
+    <button id="mobile-controls" type="button" aria-expanded="false" aria-controls="auto-panel">Controls</button>
+    <aside id="auto-panel" aria-label="Auto-play controls">
+      <button
+        id="auto-toggle"
+        type="button"
+        role="switch"
+        aria-checked="false"
+        aria-label="Auto-play"
+        aria-keyshortcuts="Space"
+      >
+        <span id="playback-label">Paused</span><kbd>Space</kbd
+        ><span class="toggle-track" aria-hidden="true"></span>
+      </button>
+      <div class="speed-row">
+        <label for="auto-speed">Click speed</label
+        ><span><output id="speed-value">4</output><small> / s</small></span>
+      </div>
+      <input id="auto-speed" type="range" min="0" max="16" step="1" value="2" />
+      <span id="actual-rate">Actual 0 /s</span>
+      <div class="scale-labels">
+        <span>1</span><span>256</span><span>65,536</span>
+      </div>
+      <div class="divider"></div>
+      <label class="switch-row"
+        ><span>Probability overlay <kbd>F</kbd></span
+        ><input id="show-probability" type="checkbox" role="switch" checked
+      /></label>
+      <label class="switch-row auxiliary-switch"
+        ><span>Auto-pan</span
+        ><input id="auto-center" type="checkbox" role="switch" checked
+      /></label>
+      <label
+        class="switch-row auxiliary-switch"
+        title="Pause before guessing, after all known safe moves are exhausted"
+        ><span>Pause before guessing</span
+        ><input id="run-to-guess" type="checkbox" role="switch"
+      /></label>
+      <span id="overlay-hint" class="sr-only"
+        >Hold F to temporarily invert visibility</span
+      >
+      <span id="auto-status" class="sr-only" role="status">Paused</span>
+    </aside>
+    <section
+      id="score-plot"
+      aria-label="Score and detonated mine ratio history"
+    >
+      <div class="plot-heading">
+        <span>Score ÷ opened cells</span
+        ><span class="plot-summary">0 clicks</span>
+      </div>
+      <div class="plot-legend">
+        <span>Score / opened</span
+        ><span class="mine-ratio-legend">Detonated / known mines</span>
+      </div>
+      <div class="plot-ranges" role="group" aria-label="History range">
+        <button type="button" data-window="0" aria-pressed="true">All</button>
+        <button type="button" data-window="100000" aria-pressed="false">
+          100k
+        </button>
+        <button type="button" data-window="10000" aria-pressed="false">
+          10k
+        </button>
+        <button type="button" data-window="1000" aria-pressed="false">
+          1k
+        </button>
+      </div>
+      <svg
+        viewBox="0 0 320 180"
+        role="img"
+        aria-label="Score versus clicks"
+      ></svg>
+      <span class="plot-tooltip" hidden></span>
+    </section>
+    <section id="density-plot" aria-label="Mine density history">
+      <div class="plot-heading">
+        <span
+          title="(Revealed mines + flags) / (opened cells + flagged cells), without double counting"
+          >Mine density / clicks</span
+        ><span class="plot-summary">0 clicks</span>
+      </div>
+      <div class="plot-ranges" role="group" aria-label="History range">
+        <button type="button" data-window="0" aria-pressed="true">All</button>
+        <button type="button" data-window="100000" aria-pressed="false">
+          100k
+        </button>
+        <button type="button" data-window="10000" aria-pressed="false">
+          10k
+        </button>
+        <button type="button" data-window="1000" aria-pressed="false">
+          1k
+        </button>
+      </div>
+      <svg
+        viewBox="0 0 320 180"
+        role="img"
+        aria-label="Mine density versus clicks"
+      ></svg>
+      <span class="plot-tooltip" hidden></span>
+    </section>
+    <nav id="mobile-charts" aria-label="Charts">
+      <button type="button" data-mobile-plot="score" aria-controls="score-plot" aria-expanded="false">Score chart</button>
+      <button type="button" data-mobile-plot="density" aria-controls="density-plot" aria-expanded="false">Mine density</button>
+    </nav>
     <script src="./src/index.ts" async type="module"></script>
   </body>
 </html>

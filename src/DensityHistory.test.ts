@@ -1,0 +1,46 @@
+import { it, expect } from "vitest";
+import { Field } from "./Field";
+import { trackDensity } from "./DensityHistory";
+it("counts resolved area once, excludes hidden mines and tracks unflags", () => {
+  const f = new Field(0.2, 0, "density", "1");
+  f.clickScores = [0, 1, 2];
+  f._setCell(0, 0, { isOpen: true, isMine: false });
+  f._setCell(1, 0, { isOpen: true, isMine: true });
+  f._setCell(2, 0, { isFlagged: true, isMine: true });
+  f._setCell(3, 0, { isMine: true });
+  trackDensity(f);
+  expect(f.densityStartClick).toBe(2);
+  expect(f.densityHistory).toEqual([2 / 3]);
+  expect(f.openedCountHistory).toEqual([2]);
+  f._setCell(2, 0, { isFlagged: false });
+  f.emit("cellChanged", f.getCell(2, 0));
+  f.recordClick();
+  expect(f.densityHistory).toEqual([2 / 3, 1 / 2]);
+  expect(f.openedCountHistory).toEqual([2, 2]);
+  f.emit("cellChanged", f.getCell(1, 0));
+  f.recordClick();
+  expect(f.densityHistory.at(-1)).toBe(1 / 2);
+  const restored = new Field(0.2, 0, "restored", "1");
+  restored.clickScores = [...f.clickScores];
+  restored.densityStartClick = f.densityStartClick;
+  restored.densityHistory = [...f.densityHistory];
+  trackDensity(restored);
+  expect(restored.densityHistory).toEqual(f.densityHistory);
+});
+
+it("counts detonations separately from flags and preserves the history start", () => {
+  const f = new Field(0.2, 0, "detonations", "1");
+  f.clickScores = [0, 1, 2];
+  f._setCell(0, 0, { isOpen: true, isMine: true });
+  f._setCell(1, 0, { isFlagged: true, isMine: true });
+  f._setCell(2, 0, { isOpen: true, isMine: false });
+  trackDensity(f);
+  expect(f.detonatedCountStartClick).toBe(2);
+  expect(f.detonatedCountHistory).toEqual([1]);
+  expect(f.mineCountHistory).toEqual([2]);
+  f._setCell(1, 0, { isOpen: true, isFlagged: false, isMine: true });
+  f.emit("cellChanged", f.getCell(1, 0));
+  f.recordClick();
+  expect(f.detonatedCountHistory).toEqual([1, 2]);
+  expect(f.mineCountHistory).toEqual([2, 2]);
+});

@@ -7,11 +7,11 @@ import { Chunk } from "./Chunk";
 import seedrandom from "seedrandom";
 import { Cell } from "./Cell";
 import { SimpleCellData } from "./CellData";
-import { Type } from "class-transformer";
-import "reflect-metadata";
 import { Layout } from "./Layouts";
 
 export type ChunkedField = Record<number, Record<number, Chunk>>;
+
+export const BASE_OPEN_SCORE = 1;
 
 export class Field extends PIXI.EventEmitter {
   public fieldData: ChunkedField;
@@ -21,13 +21,20 @@ export class Field extends PIXI.EventEmitter {
   public gameOver: boolean;
   public neighborPosition: Layout;
   public score: number;
+  public clickScores: number[] = [];
+  public densityHistory: number[] = [];
+  public densityStartClick = 0;
+  public detonatedCountHistory: number[] = [];
+  public detonatedCountStartClick = 0;
+  public mineCountHistory: number[] = [];
+  public mineCountStartClick = 0;
+  public openedCountHistory: number[] = [];
+  public openedCountStartClick = 0;
   public visibleChunks: { x: number; y: number }[];
 
   public fieldName: string;
   private rng: seedrandom.PRNG;
 
-  // todo use zod to validate. deprecate class-transformer
-  @Type(() => SimpleCellData)
   public cellData = new SimpleCellData();
 
   public constructor(
@@ -58,6 +65,11 @@ export class Field extends PIXI.EventEmitter {
     // be able to change the options through an object
     // overwrite mine state
     // freeze mode
+  }
+
+  public recordClick() {
+    this.clickScores.push(this.score);
+    this.emit("clickRecorded");
   }
 
   public getCell(x: number, y: number): Cell {
@@ -132,7 +144,7 @@ export class Field extends PIXI.EventEmitter {
       this.emit("cellChanged", cell);
       return [];
     }
-    this.score++;
+    this.score += BASE_OPEN_SCORE;
 
     // generating of neighbors. we generate the cells when a neighbor is opened
     const neighbors = this.getNeighbors(cell.x, cell.y);
@@ -289,9 +301,12 @@ export class Field extends PIXI.EventEmitter {
 
   public _setCell(x: number, y: number, cell: Partial<Cell>) {
     const gottenCell = this.cellData.get(x, y);
+    const oldMine = !!gottenCell.isMine;
     if (cell.isMine !== undefined) gottenCell.isMine = cell.isMine;
     if (cell.isFlagged !== undefined) gottenCell.isFlagged = cell.isFlagged;
     if (cell.isOpen !== undefined) gottenCell.isOpen = cell.isOpen;
     this.cellData.set(x, y, gottenCell);
+    this.emit("cellStored", {x, y});
+    if (oldMine !== !!gottenCell.isMine) this.emit("mineGenerated", {x, y});
   }
 }

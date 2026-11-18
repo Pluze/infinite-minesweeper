@@ -1,4 +1,4 @@
-import { TweenMax } from "gsap";
+import { TweenMax, gsap } from "gsap";
 import * as PIXI from "pixi.js";
 import { Cell } from "./Cell";
 import { assert } from "./assert";
@@ -27,13 +27,13 @@ export class CellSprite {
   public neighborCount: NeighborCount | null;
   private back: PIXI.Sprite;
   private front: PIXI.Sprite;
-  private lorez: PIXI.Sprite;
 
   public constructor(
     cell: Cell,
     neighborCount: NeighborCount | null,
     parent: PIXI.Container,
     playAnimation: boolean,
+    private updateOverview: (cell: Cell, color: number) => void,
   ) {
     this.neighborCount = neighborCount;
     // todo when we zoom out a lot, we should use single-pixel texture. could do white with tint, and then remove alpha on top layer.
@@ -57,31 +57,31 @@ export class CellSprite {
     this.back.y = y;
     this.back.zIndex = 1;
     this.front.zIndex = 2;
-    this.lorez = new PIXI.Sprite(PIXI.Texture.WHITE);
-    this.lorez.width = CELL_WIDTH;
-    this.lorez.height = CELL_WIDTH;
-    this.lorez.anchor.set(0.5);
-    this.lorez.tint = cellTexture.lorezTint;
-    this.lorez.x = x;
-    this.lorez.y = y;
-    const lorezLayer = parent.getChildByLabel("lorez") as PIXI.Container;
-    const foregroundLayer = parent.getChildByLabel("fg") as PIXI.Container;
-    foregroundLayer.addChild(this.front, this.back);
-    lorezLayer.addChild(this.lorez);
+    parent.addChild(this.front, this.back);
+    this.updateOverview(cell, cellTexture.lorezTint);
 
     if (playAnimation) this.playUpdateAnimation();
   }
 
-  public update(cell: Cell) {
+  public update(cell: Cell, playAnimation = true) {
     const cellTexture = this.getCellTexture(cell);
     this.back.texture = cellTexture.back;
     this.front.texture = cellTexture.front;
-    this.lorez.tint = cellTexture.lorezTint;
+    this.updateOverview(cell, cellTexture.lorezTint);
 
-    this.playUpdateAnimation();
+    if (playAnimation) this.playUpdateAnimation();
+    else this.stopAnimation();
+  }
+
+  public stopAnimation() {
+    gsap.killTweensOf(this.front.scale);
+    gsap.killTweensOf(this.back);
+    this.front.scale.set(frontScale);
+    this.back.alpha = 1;
   }
 
   private playUpdateAnimation() {
+    this.stopAnimation();
     const animationTime = 0.2;
 
     this.front.scale.set(frontScale);
@@ -161,3 +161,13 @@ const lorezTintNeighborCount = [
   0xffffff, //7
   0xaa00ff, //8 todo, we need to make the 8 stand out when zoomed out.
 ] as const;
+
+export function overviewColor(cell: Cell, count: number | null) {
+  if (cell.isOpen)
+    return cell.isMine
+      ? 0xff0000
+      : count
+        ? lorezTintNeighborCount[count as 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8]
+        : 0x444444;
+  return cell.isFlagged ? 0xa0a0a0 : 0x000000;
+}

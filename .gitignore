@@ -145,3 +145,7 @@ package-lock.json
 **/*.bun
 
 localstorage
+.runtime/
+.local-server.log
+
+!package-lock.json

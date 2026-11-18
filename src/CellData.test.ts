@@ -38,3 +38,16 @@ function assertCellCanBeSaved(cell: Cell) {
   const newCell = cellData.get(cell.x, cell.y);
   assertCellsAreSame(cell, newCell);
 }
+
+// Encoding is also the persisted format: retain all open/flag/mine combinations.
+test("round-trips every cell state without string conversion", () => {
+  const data = new SimpleCellData();
+  for (const mine of [undefined, false, true])
+    for (const open of [false, true])
+      for (const flagged of [false, true]) {
+        const cell = new Cell(-7, 9, flagged, mine);
+        cell.isOpen = open;
+        data.set(-7, 9, cell);
+        expect(data.get(-7, 9)).toEqual(cell);
+      }
+});

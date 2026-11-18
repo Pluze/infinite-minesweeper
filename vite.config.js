@@ -1,7 +1,7 @@
 import { defineConfig } from "vite";
 
 export default defineConfig({
-  base: "/infinite-minesweeper/",
+  base: "./",
   resolve: {
     alias: {
       crypto: "src/empty.ts",

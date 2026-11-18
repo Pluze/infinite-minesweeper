@@ -27,6 +27,7 @@ const textureNames = [
 export type MinesTextures = Record<(typeof textureNames)[number], Texture>;
 
 export let width = 2;
+let cachedTextures: MinesTextures | undefined;
 
 export async function loadTextures(): Promise<MinesTextures> {
   const themeNames = ["default", "borbitnight", "winxp"];
@@ -48,11 +49,13 @@ export async function loadTextures(): Promise<MinesTextures> {
   );
 
   width = textures.closed.width;
+  cachedTextures = textures;
 
   return textures;
 }
 
 export function getTextures(): MinesTextures {
+  if (cachedTextures) return cachedTextures;
   const gottenTextures: Record<string, Texture> = {};
 
   for (const textureName of textureNames) {
@@ -65,6 +68,7 @@ export function getTextures(): MinesTextures {
   }
 
   const textures = validateTextures(gottenTextures);
+  cachedTextures = textures;
 
   return textures;
 }

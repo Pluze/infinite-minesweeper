@@ -1,17 +1,25 @@
+import { renderQuality } from "./RenderQuality";
+import { BatchedSave } from "./BatchedSave";
+import { ClickFlash } from "./ClickFlash";
+import { ProbabilityOverlay } from "./ProbabilityOverlay";
+import { AutoPlayer } from "./AutoPlayer";
+import { CELL_WIDTH } from "./CellSprite";
 import { Cursor } from "./Cursor";
 import * as PIXI from "pixi.js";
-import { zoom, ZoomTransform } from "d3-zoom";
+import { zoom, zoomTransform, ZoomTransform } from "d3-zoom";
 import { select } from "d3-selection";
 import { z } from "zod";
 import { Field } from "./Field";
 import { FieldPersistence } from "./FieldPersistence";
 import { assert } from "./assert";
-import { WorldPos, ScreenPos } from "./CoordTypes";
+import { WorldPos } from "./CoordTypes";
 
 // todo add setting for long press duration
 const LONG_PRESS_DURATION = 200; // Duration in milliseconds to consider it a long press
 
 export class Controls {
+  private static saver: BatchedSave;
+  private static center: (x: number, y: number) => void;
   private static cursor: Cursor;
   private static field: Field;
   private static fieldStorage: FieldPersistence | undefined;
@@ -23,7 +31,25 @@ export class Controls {
     fieldStorage: FieldPersistence,
   ) {
     Controls.field = field;
+    const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+    renderQuality(field).update({ reducedMotion: reducedMotion.matches });
+    reducedMotion.addEventListener("change", () =>
+      renderQuality(field).update({ reducedMotion: reducedMotion.matches }),
+    );
     Controls.fieldStorage = fieldStorage;
+    Controls.saver = new BatchedSave(
+      () => fieldStorage.saveAsync(field, field.fieldName),
+      (error) => {
+        console.error(error);
+        field.emit("saveFailed");
+      },
+    );
+    window.addEventListener("pagehide", () => Controls.saver.flush());
+    document.addEventListener("visibilitychange", () => {
+      if (document.hidden) Controls.saver.flush();
+    });
+    field.on("playbackPaused", () => Controls.saver.flush());
+    field.on("beforeRestart", () => Controls.saver.discard());
 
     Controls.cursor = new Cursor();
     const foreground = rootObject.getChildByLabel("container");
@@ -32,6 +58,12 @@ export class Controls {
 
     Controls.setupZoom(rootObject);
     Controls.disableRightClickContextMenu();
+    field.on("autoBatchFinished", () => Controls.finishBatch());
+    field.on("playbackPaused", () => {
+      Controls.finishBatch();
+      Controls.saver.flush();
+    });
+    new AutoPlayer(field, (x, y) => Controls.openAt(x, y));
   }
 
   private static disableRightClickContextMenu() {
@@ -42,39 +74,72 @@ export class Controls {
     // We have to get this before setting up zoom so we don't show the zoomed out version for some frames after it has been created.
     const savedTransform = savedCameraTransform.get();
 
-    const logEvent = (event: Event) => console.log(event.type);
+    const logEvent = (_event: Event) => {};
 
-    const zoomHandler = zoom().on("zoom", (rawEvent) => {
-      logEvent(rawEvent);
-      const event = eventSchema.parse(rawEvent);
+    let cameraFrame = 0;
+    let cameraMoving = false;
+    let manualUntil = 0;
+    let pendingRegion = "";
+    let pendingSince = 0;
+    const stopCameraAnimation = () => {
+      cancelAnimationFrame(cameraFrame);
+      cameraMoving = false;
+    };
+    let lastCameraStart = -Infinity;
+    const autoPanToggle =
+      document.querySelector<HTMLInputElement>("#auto-center");
+    let autoPan = localStorage.getItem("autoPan") !== "off";
+    if (autoPanToggle) {
+      autoPanToggle.checked = autoPan;
+      autoPanToggle.onchange = () => {
+        autoPan = autoPanToggle.checked;
+        localStorage.setItem("autoPan", autoPan ? "on" : "off");
+        if (!autoPan) stopCameraAnimation();
+      };
+    }
+    const zoomHandler = zoom()
+      .on("start", (event) => {
+        if (event.sourceEvent) {
+          stopCameraAnimation();
+          manualUntil = performance.now() + 1500;
+        }
+      })
+      .on("zoom", (rawEvent) => {
+        logEvent(rawEvent);
+        const event = eventSchema.parse(rawEvent);
 
-      const container = rootObject.getChildByLabel("container") as PIXI.Sprite;
-      const foreground = container.getChildByLabel("fg") as PIXI.Sprite;
-      const background = rootObject.getChildByLabel("bg") as PIXI.TilingSprite;
+        const container = rootObject.getChildByLabel(
+          "container",
+        ) as PIXI.Sprite;
+        const foreground = container.getChildByLabel("fg") as PIXI.Sprite;
+        const background = rootObject.getChildByLabel(
+          "bg",
+        ) as PIXI.TilingSprite;
 
-      const x = event.transform.x;
-      const y = event.transform.y;
-      const scale = event.transform.k;
+        const x = event.transform.x;
+        const y = event.transform.y;
+        const scale = event.transform.k;
+        renderQuality(Controls.field).update({ scale });
 
-      container.position.set(x, y);
-      container.scale.set(scale);
-      background.tilePosition.set(x, y);
-      background.tileScale.set(scale);
-      function lerp(a: number, b: number, alpha: number): number {
-        return a + alpha * (b - a);
-      }
-      const lerpedScale = lerp(-1, 0.5, scale);
-      background.alpha = lerpedScale;
-      foreground.alpha = lerpedScale;
+        container.position.set(x, y);
+        container.scale.set(scale);
+        background.tilePosition.set(x, y);
+        background.tileScale.set(scale);
+        function lerp(a: number, b: number, alpha: number): number {
+          return a + alpha * (b - a);
+        }
+        const lerpedScale = lerp(-1, 0.5, scale);
+        background.alpha = lerpedScale;
+        foreground.alpha = lerpedScale;
 
-      // todo dedupe between touchend
-      if (longPressTimer) {
-        clearTimeout(longPressTimer);
-        longPressTimer = null;
-      }
+        // todo dedupe between touchend
+        if (longPressTimer) {
+          clearTimeout(longPressTimer);
+          longPressTimer = null;
+        }
 
-      savedCameraTransform.set(event.transform);
-    });
+        savedCameraTransform.set(event.transform);
+      });
     // todo when pressing mousedown, then i want to update the cell sprite to be from closed to open. This is both when pressing down(before releasing) on a closed cell, and on an open cell with a closed unflagged neighbor
     // todo add option to pan using middle mouse button, which allows us to enable immediate mode on left and right click.
     // todo enable immediate mode on right click, because we are not using it to flag
@@ -137,6 +202,12 @@ export class Controls {
           return;
         }
         logEvent(e);
+        const foreground = rootObject.getChildByLabel("container")!;
+        const point = foreground.toLocal({
+          x: e.clientX,
+          y: e.clientY,
+        }) as WorldPos;
+        Controls.cursor.moveTo(point.x, point.y);
         Controls.open();
       })
       .on("mouseup", (e: MouseEvent) => {
@@ -147,7 +218,7 @@ export class Controls {
         logEvent(e);
         if (e.button === 2) Controls.flag();
       })
-      .on("mousemove", (event: PointerEvent & ScreenPos) => {
+      .on("mousemove", (event: MouseEvent) => {
         logEvent(event);
         assert(typeof event.x === "number");
         assert(typeof event.y === "number");
@@ -159,6 +230,81 @@ export class Controls {
       })
       .call(zoomHandler)
       .on("dblclick.zoom", null);
+
+    new ClickFlash(Controls.field, () => zoomTransform(selection.node()!));
+    new ProbabilityOverlay(Controls.field, () =>
+      zoomTransform(selection.node()!),
+    );
+
+    Controls.center = (x, y) => {
+      if (!autoPan || cameraMoving || performance.now() < manualUntil) return;
+      const canvas = selection.node();
+      if (!canvas) return;
+      const from = zoomTransform(canvas);
+      const screenX = from.x + (x + 0.5) * CELL_WIDTH * from.k;
+      const screenY = from.y + (y + 0.5) * CELL_WIDTH * from.k;
+      const marginX = window.innerWidth * 0.05;
+      const marginY = window.innerHeight * 0.05;
+      if (
+        screenX >= marginX &&
+        screenX <= window.innerWidth - marginX &&
+        screenY >= marginY &&
+        screenY <= window.innerHeight - marginY
+      ) {
+        pendingRegion = "";
+        return;
+      }
+      const targetX = window.innerWidth / 2 - (x + 0.5) * CELL_WIDTH * from.k;
+      const targetY = window.innerHeight / 2 - (y + 0.5) * CELL_WIDTH * from.k;
+      const started = performance.now();
+      const elapsed = started - lastCameraStart;
+      const profile = renderQuality(Controls.field);
+      const offscreen =
+        screenX < 0 ||
+        screenX > window.innerWidth ||
+        screenY < 0 ||
+        screenY > window.innerHeight;
+      const fast = profile.state.running && profile.state.target >= 128;
+      const region = `${Math.floor(x / 24)},${Math.floor(y / 24)}`;
+      if (fast) {
+        if (region !== pendingRegion) {
+          pendingRegion = region;
+          pendingSince = started;
+          return;
+        }
+        if (started - pendingSince < 120) return;
+      }
+      const cooldown = offscreen
+        ? 400
+        : Math.max(400, profile.current.cameraCooldownMs);
+      if (elapsed < cooldown) return;
+      cameraMoving = true;
+      pendingRegion = "";
+      lastCameraStart = started;
+      const distance = Math.hypot(targetX - from.x, targetY - from.y);
+      const duration = window.matchMedia("(prefers-reduced-motion: reduce)")
+        .matches
+        ? 0
+        : profile.state.running && profile.state.target >= 128
+          ? Math.min(160, Math.max(90, 70 + distance * 0.06))
+          : Math.min(280, Math.max(140, 100 + distance * 0.12));
+      const animate = (now: number) => {
+        const t = duration ? Math.min(1, (now - started) / duration) : 1;
+        // Fast cubic ease-out preserves a soft stop without chasing stale targets.
+        const eased = 1 - (1 - t) ** 3;
+        zoomHandler.transform(
+          selection,
+          new ZoomTransform(
+            from.k,
+            from.x + (targetX - from.x) * eased,
+            from.y + (targetY - from.y) * eased,
+          ),
+        );
+        if (t < 1) cameraFrame = requestAnimationFrame(animate);
+        else cameraMoving = false;
+      };
+      cameraFrame = requestAnimationFrame(animate);
+    };
 
     if (savedTransform) {
       zoomHandler.transform(
@@ -190,8 +336,35 @@ export class Controls {
     if (Controls.fieldStorage === undefined)
       throw new Error("tried to save, but fieldstorage is undefined");
 
-    this.field.open(x, y);
-    Controls.fieldStorage.save(Controls.field, Controls.field.fieldName);
+    Controls.openAt(x, y);
+  }
+
+  private static pendingCenter: { x: number; y: number } | undefined;
+  private static pendingSave = false;
+  private static finishBatch() {
+    if (Controls.pendingCenter) {
+      Controls.center(Controls.pendingCenter.x, Controls.pendingCenter.y);
+      Controls.pendingCenter = undefined;
+    }
+    if (Controls.pendingSave) {
+      Controls.saver.request();
+      Controls.pendingSave = false;
+    }
+  }
+  public static openAt(x: number, y: number) {
+    const changed = Controls.field.open(x, y);
+    Controls.field.recordClick();
+    const quality = renderQuality(Controls.field);
+    if (quality.state.running && quality.state.target >= 128) {
+      if (changed.length) Controls.pendingCenter = { x, y };
+      Controls.pendingSave = true;
+      return;
+    }
+    if (changed.length) {
+      // Follow the operation itself, not a potentially huge flood-fill bounding box.
+      Controls.center(x, y);
+    }
+    Controls.saver.request();
   }
 
   // todo this logic should be moved to the field. If we want custom behavior then we should save settings on the field to enable/disable multi-flagging.
@@ -203,8 +376,9 @@ export class Controls {
       throw new Error("tried to save, but fieldstorage is undefined");
 
     Controls.field.flag(x, y);
+    Controls.field.recordClick();
 
-    Controls.fieldStorage.save(Controls.field, Controls.field.fieldName);
+    Controls.saver.request();
   }
 }
 

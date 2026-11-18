@@ -4,16 +4,19 @@
   "description": "An infinite, open source, minesweeper implementation. Perfect for creating bots, and based on borbit's mienfield.com",
   "scripts": {
     "dev": "vite --open",
-    "check": "bun i && eslint --ext .js,.jsx,.ts,.tsx ./src --fix && prettier --write . && bun ci && vite preview --open",
-    "ci": "bun i --production && tsc --noemit && prettier --check . && bun test && vite build",
+    "check": "npm run ci",
+    "ci": "npm run typecheck && npm run test:run && npm run build",
     "test": "vitest",
-    "test-single": "uvu -r tsm",
-    "test-watch": "watchlist -e src -- bun run test-single",
-    "type-watch": "tsc --noEmit --watch"
+    "test-watch": "vitest",
+    "type-watch": "tsc --noEmit --watch",
+    "start": "vite --host 127.0.0.1 --port 5173 --strictPort --open",
+    "build": "vite build",
+    "test:run": "vitest run",
+    "typecheck": "tsc --noEmit --skipLibCheck"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Zikoat/infinite-minesweeper.git"
+    "url": "git+https://github.com/Pluze/infinite-minesweeper.git"
   },
   "keywords": [
     "mines",
@@ -24,9 +27,9 @@
   "author": "Sigurd Schoeler",
   "license": "MIT",
   "bugs": {
-    "url": "https://github.com/Zikoat/infinite-minesweeper/issues"
+    "url": "https://github.com/Pluze/infinite-minesweeper/issues"
   },
-  "homepage": "https://github.com/Zikoat/infinite-minesweeper#readme",
+  "homepage": "https://github.com/Pluze/infinite-minesweeper#readme",
   "dependencies": {
     "@total-typescript/ts-reset": "^0.5.1",
     "@types/d3-zoom": "^3.0.8",
@@ -37,7 +40,6 @@
     "@typescript-eslint/eslint-plugin": "^6.4.1",
     "@typescript-eslint/parser": "^6.4.1",
     "bun-types": "^0.1.2",
-    "class-transformer": "^0.5.1",
     "d3-selection": "^3.0.0",
     "d3-zoom": "^3.0.0",
     "eslint": "^8.47.0",
@@ -48,7 +50,6 @@
     "node-localstorage": "^2.2.1",
     "pixi.js": "^8.2.6",
     "prettier": "^3.0.2",
-    "reflect-metadata": "^0.1.13",
     "seedrandom": "^3.0.5",
     "type-fest": "^4.23.0",
     "typescript": "^5.5.4",
@@ -56,5 +57,8 @@
     "vitest": "^0.34.2",
     "watchlist": "^0.3.1",
     "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "fake-indexeddb": "^6.2.8"
   }
 }

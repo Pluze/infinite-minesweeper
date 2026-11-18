@@ -1,58 +1,105 @@
-# ![flag](https://i.imgur.com/YnpGd36.png) Minefield
+# Infinite Minesweeper · Auto Explorer
 
-An infinite, open source, Minesweeper. Based on borbit's mienfield.com
+[Play online](https://pluze.github.io/infinite-minesweeper/) · [Validation](https://github.com/Pluze/infinite-minesweeper/actions/workflows/ci.yml) · [Deployment](https://github.com/Pluze/infinite-minesweeper/actions/workflows/pages.yml)
 
-## Play the game at [Zikoat.github.io](https://zikoat.github.io/)
+An infinite Minesweeper game with automatic exploration, probability overlays, and live statistics. This fork builds on [Zikoat/infinite-minesweeper](https://github.com/Zikoat/infinite-minesweeper), originally based on borbit's mienfield.com.
 
-and join our [Discord][discord]
+## Run locally
 
-## Getting started with development
+Install Node.js 18 or newer, then run:
 
-### Prerequisites
-
-Install [nodejs](https://nodejs.org/en/)
-
-### Installing
-
-[clone the git repository](https://help.github.com/articles/cloning-a-repository/) to your computer, from a [git GUI](https://www.sourcetreeapp.com/), or with the console.
-
-open your terminal, and change your directory to the cloned folder
-
-```shell
-cd infinite-minesweeper
-```
-
-and run
-
-```shell
-npm install
-```
-
-to install the required dependencies
-
-### Starting the development environment
-
-```shell
+```sh
+npm ci
 npm start
 ```
 
-`npm start` will open a new tab in your browser, showing you a new field. gameplay is the same as mienfield.com, but works locally and is not multiplayer. The files in your repository are being watched, and the site is getting reloaded automatically when you change a file.
+Open http://127.0.0.1:5173. On macOS, you can also double-click `start.command`; it installs dependencies if needed. Press Ctrl+C in the terminal to stop the server. The optional local `.runtime` directory is not distributed with this repository.
 
-## Deploying
+## Controls
 
-```shell
+- **Space:** toggle auto-play. Opening, refreshing, or starting a new game always begins paused.
+- **Speed:** powers of two from 1 to 65,536 operations per second. The actual rate is displayed separately.
+- **Probability overlay:** toggle risk markers; hold **F** to temporarily invert visibility.
+- **Auto-pan:** follow operations near the screen edge, preserving zoom. Drag to pan and use the wheel to zoom.
+- **Pause before guessing:** exhaust known deterministic moves across the board before pausing ahead of a risky move.
+- **Mobile:** playback stays in a compact bar. Open Controls for settings; the bottom chart buttons show one chart at a time. Hidden charts skip rendering.
+- **Menu:** start a new game or enter fullscreen.
+
+## Exploration and visualization
+
+The planner exhausts known deterministic moves before allowing any guess, regardless of the pause-before-guessing setting. Internal joint deductions take precedence over exterior simple moves. It prioritizes enclosed unknown islands among deterministic moves, then uses the current connected region's centroid, concavity, and local topology to rank moves. At equal risk and island priority, it continues through the active 24 × 24 region before moving elsewhere. These are geometric preferences, not a guarantee that board topology stays unchanged.
+
+Nearby observed mine density adjusts the base prior using weighted 8 × 8 buckets in a 3 × 3 neighborhood, with 64 virtual observations for smoothing. Only opened cells and flags contribute; hidden mines are never sampled. This is an empirical heuristic affected by safe-cell selection bias and incorrect flags.
+
+When a guess is necessary, bounded constraint enumeration estimates mine probabilities without inspecting hidden mine states. Large or expensive components use bounded sequential importance sampling of legal layouts (up to 128 variables and 256 attempts per component), with effective-sample-size checks and a smoothed fallback. Exact enumeration receives a 6 ms search budget and sampling uses the remaining 12 ms budget within each recomputed partition; these are cooperative search limits, not a hard limit on total snapshot time. Sampled probabilities remain approximate and never prove a cell safe. Symmetric single-clue components use an analytic solution. The single-cell expected score is `1 − 101 × mine probability`; cascade rewards are not included. Flags are assumed to be mines, so incorrect flags affect inference.
+
+Probability labels remain visible at every click speed when a cell is at least 26 screen pixels wide; zoomed-out views use colors to avoid overlapping text. Bright cyan marks safe cells and bright pink-red marks mines. Overview mode uses high-contrast markers instead of crowded labels. Hover for probability details. Rendering follows the board camera on the same frame, while inference is updated separately with a bounded budget.
+
+The bottom-left chart shows `(revealed mines + flags) / (opened cells + unopened flagged cells)`. The bottom-right chart shows `score / opened cells` (mint, left axis), overlaid with `detonated mines / known mines` (orange dashed line, right percentage axis). Known mines are revealed mines plus unopened flagged cells; a mine is counted once. Opened cells include revealed mines and exclude unopened flags. Both charts offer all history, 100k, 10k, and 1k clicks. A zero denominator displays a dash.
+
+## Saves and performance
+
+Board progress and recorded history are saved to IndexedDB, with migration from older localStorage saves. Settings remain in localStorage. History downsampling is not applied. Manual import/export is not available. Clearing browser data deletes the local save. After an initial checkpoint, saves append changed cells and new history samples to an IndexedDB journal. Reloading restores the checkpoint and journal; the next checkpoint compacts the journal. Saves are batched while playing and flushed on pause or page visibility changes; an abrupt browser exit can lose recent progress. Historical metrics missing from older saves begin recording when available rather than fabricating past values.
+
+Incremental frontier queues, connected-component maintenance, cached constraint groups, chunked overview rendering, lazy detail sprites, and batched saves reduce work on large boards. Fast play simplifies effects without capping board rendering FPS. Auto-pan uses edge thresholds, region dwell time, cooldowns, and a temporary hold after manual camera input to reduce oscillation.
+
+**65,536 is a requested rate, not a throughput guarantee.** Large-board performance still depends on inference cost and hardware.
+
+## Development
+
+```sh
+npm run typecheck
+npm run test:run
 npm run build
 ```
 
-The files will be built to the `./dist` directory. Copy these files to your hosting platform
+The production build is written to `dist/`. To replay a JSON board fixture in the optional solver benchmark:
 
-## Made With
+```sh
+PERF_BOARD=/absolute/path/board.json npm run test:run -- src/Performance.test.ts
+```
 
-- Pixi.js
-- TypeScript
-- ~~Webpack~~ [bun](https://bun.sh/)
-- GreenSock
-- :heart:
+This benchmark excludes browser rendering and is not equivalent to the live actual-rate display. See [the local guide](LOCAL-GUIDE.md) for scoring and behavior details.
 
-[discord]: https://discord.gg/XzpSVxx
-[mail]: mailto:sschoeler99@gmail.com
+Built with TypeScript, Pixi.js, Vite, D3 zoom, and GreenSock. Original authorship and MIT license metadata are retained.
+
+## GitHub Actions
+
+The Validate workflow checks pull requests. Every push to `master` runs the same type checks, tests, and build in the Pages workflow before publishing `dist/`; validation is not duplicated across two push workflows.
+
+### Publish your own fork
+
+1. Fork this repository and enable GitHub Actions under the **Actions** tab if GitHub prompts you.
+2. Open **Settings → Pages → Build and deployment → Source** and select **GitHub Actions**.
+3. Push a commit to `master`, or open **Actions → Deploy to GitHub Pages → Run workflow**.
+4. Wait for the deployment to succeed. Your URL is `https://<username>.github.io/<repository>/`; the deployment job also shows the exact URL.
+
+Vite builds with relative asset paths, so the site works under a repository subpath as well as at a domain root. This is a static client-side application; no API keys or backend server are needed.
+
+If deployment fails, check the workflow's failed step, confirm Pages uses **GitHub Actions**, and confirm Actions is enabled for the fork. Changes to the default branch name must also be reflected in both workflow triggers.
+
+Online and local games have separate browser storage because they use different origins. Clearing site data removes that site's saves. A Pages deployment updates the application, not your saved board.
+
+The macOS launcher reopens an existing Infinite Minesweeper development server on port 5173. If a different service occupies the port, it reports the conflict without stopping that service.
+
+
+## Implementation and validation limits
+
+Clue changes invalidate their 3 × 3 neighborhood. Constraint components follow shared unknown cells, including dependencies across spatial boundaries; unchanged components reuse cached deductions and probabilities. Enclosed unknown regions use row intervals, and candidate queues update incrementally. All known deterministic moves are checked before guessing.
+
+The live rate counts executed board operations, which are not the same as opened cells. A chord or flood fill can open many cells in one operation. A short early-game rate does not establish sustained million-cell throughput. The latest large-board browser check fell below 10,000 operations/s; this target remains unmet. See [the consolidation audit](AUDIT.md) for the retained changes and open issues.
+
+Optional diagnostic tests accept JSON board fixtures:
+
+```sh
+ABLATION_BOARD=/absolute/path/board.json npm run test:run -- src/Ablation.test.ts
+PARTITION_BOARD=/absolute/path/board.json npm run test:run -- src/PartitionBenchmark.test.ts
+```
+
+These measure solver variants and dependency maintenance without rendering, persistence, or browser scheduling. Ablations that disable island priority change behavior and are not equivalent optimizations. They are diagnostic tools, not acceptance results for live throughput.
+
+### Long-running sessions
+
+Offscreen detailed sprites are released and reconstructed from the unchanged board when revisited. The overview palette and probability algorithm are unchanged. Probability-update queues are capped while the overlay is hidden; reopening it performs a complete frontier synchronization instead of replaying an unbounded queue. Worker coordinate caches retain only active frontier cells.
+
+When the browser exposes heap telemetry, auto-play pauses after two consecutive readings above 85% of the heap limit (or immediately above 95%) and requests the normal save flush. The status explains the memory-pressure pause. This is a best-effort safeguard, not a guarantee against process crashes or total system memory exhaustion; browsers without this telemetry continue normally.

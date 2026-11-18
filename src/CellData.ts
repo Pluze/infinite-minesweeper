@@ -1,7 +1,5 @@
-import { Type } from "class-transformer";
 import { Cell } from "./Cell";
 import { SimpleNumberStorage } from "./SimpleNumberStorage";
-import "reflect-metadata";
 
 interface CellData {
   get(x: number, y: number): Cell;
@@ -12,7 +10,6 @@ interface CellData {
 }
 
 export class SimpleCellData implements CellData {
-  @Type(() => SimpleNumberStorage)
   public numberStorage = new SimpleNumberStorage();
 
   public getAll(): Cell[] {
@@ -23,23 +20,20 @@ export class SimpleCellData implements CellData {
   }
 
   private cellToNumber(cell: Cell): number {
-    let output = "";
-    output += cell.isMine ? "1" : "0";
-    output += cell.isMine === undefined ? "1" : "0";
-    output += cell.isFlagged ? "1" : "0";
-    output += cell.isOpen ? "1" : "0";
-
-    return parseInt(output, 2);
+    return (
+      (cell.isMine ? 8 : 0) |
+      (cell.isMine === undefined ? 4 : 0) |
+      (cell.isFlagged ? 2 : 0) |
+      (cell.isOpen ? 1 : 0)
+    );
   }
   private numberToCell(x: number, y: number, input: number | null): Cell {
     const cell = new Cell(x, y);
 
     if (input === null) return cell;
-    const stringified = input.toString(2).padStart(4, "0");
-    cell.isMine = stringified[1] === "1" ? undefined : stringified[0] === "1";
-    cell.isFlagged = stringified[2] === "1";
-
-    cell.isOpen = stringified[3] === "1";
+    cell.isMine = (input & 4) !== 0 ? undefined : (input & 8) !== 0;
+    cell.isFlagged = (input & 2) !== 0;
+    cell.isOpen = (input & 1) !== 0;
 
     return cell;
   }
