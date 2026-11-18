@@ -1,5 +1,11 @@
 import { formatInteger } from "./NumberFormat";
-import {MemoryPressureGuard, mobileBoardLimitReached, isMemoryConstrainedDevice, type HeapUsage} from "./MemoryPressure";
+import {
+  MemoryPressureGuard,
+  mobileBoardLimitReached,
+  isMemoryConstrainedDevice,
+  reportedHeapFraction,
+  type HeapUsage,
+} from "./MemoryPressure";
 import { renderQuality } from "./RenderQuality";
 import { probabilityModel } from "./MineProbability";
 import { Field } from "./Field";
@@ -7,11 +13,15 @@ import { Field } from "./Field";
 export { findNumberMove } from "./MovePlanner";
 import { findNumberMove, islandFocus } from "./MovePlanner";
 
+const ACTIVE_PLAYBACK_KEY = "activeBackgroundPlayback";
+
 export class AutoPlayer {
   private timer: ReturnType<typeof setTimeout> | undefined;
   private running = false;
+  private suspended = false;
   private memoryGuard = new MemoryPressureGuard();
   private memoryChecked = -Infinity;
+  private hasHeapTelemetry = false;
   private wakeGeneration = 0;
   private channel =
     typeof window !== "undefined" && typeof MessageChannel !== "undefined"
@@ -104,59 +114,133 @@ export class AutoPlayer {
       event.preventDefault();
       if (!event.repeat) toggle();
     });
-    document.addEventListener("visibilitychange", () => {
-      if (document.hidden) this.pause("Paused: page is hidden.");
+    document.addEventListener("visibilitychange", () =>
+      this.visibilityChanged(),
+    );
+    document.addEventListener("freeze", () => this.suspend());
+    document.addEventListener("resume", () => this.resume());
+    window.addEventListener("pagehide", (event) => {
+      if (!this.running) return;
+      if (event.persisted) this.suspend();
+      else this.pause();
     });
-    this.pause("Paused. Start auto-play to explore.");
+    window.addEventListener("pageshow", (event) => {
+      if (event.persisted) this.resume();
+    });
+
+    if (this.shouldRestorePlayback()) this.start();
+    else this.pause("Paused. Start auto-play to explore.");
+  }
+
+  private shouldRestorePlayback() {
+    const discarded = (document as Document & { wasDiscarded?: boolean })
+      .wasDiscarded;
+    if (!discarded) return false;
+    try {
+      return sessionStorage.getItem(ACTIVE_PLAYBACK_KEY) === "on";
+    } catch {
+      return false;
+    }
+  }
+
+  private rememberPlayback() {
+    try {
+      if (this.running) sessionStorage.setItem(ACTIVE_PLAYBACK_KEY, "on");
+      else sessionStorage.removeItem(ACTIVE_PLAYBACK_KEY);
+    } catch {
+      // The browser can restrict session storage. Ordinary play still works.
+    }
+  }
+
+  private visibilityChanged() {
+    if (this.running && !this.suspended) this.reschedule();
+  }
+
+  private cancelWake() {
+    this.wakeGeneration++;
+    clearTimeout(this.timer);
+  }
+
+  private suspend() {
+    if (!this.running || this.suspended) return;
+    this.suspended = true;
+    this.cancelWake();
+    this.field.emit("playbackSuspended");
+  }
+
+  private resume() {
+    if (!this.suspended) return;
+    this.suspended = false;
+    this.visibilityChanged();
   }
 
   private schedule() {
+    if (this.suspended) return;
     const generation = ++this.wakeGeneration;
-    if (
-      this.channel &&
-      this.clicksPerSecond >= 128 &&
-      performance.now() - this.lastStep >= 1000 / this.clicksPerSecond
-    ) {
+    const rate = this.clicksPerSecond;
+    const remaining = 1000 / rate - (performance.now() - this.lastStep);
+    if (this.channel && rate >= 128 && remaining <= 0) {
       this.channel.port2.postMessage(generation);
     } else {
       this.timer = setTimeout(
         () => {
           if (generation === this.wakeGeneration) this.tick();
         },
-        this.channel
-          ? Math.max(
-              0,
-              1000 / this.clicksPerSecond - (performance.now() - this.lastStep),
-            )
-          : Math.max(4, 1000 / this.clicksPerSecond),
+        this.channel ? Math.max(0, remaining) : Math.max(4, 1000 / rate),
       );
     }
   }
 
-  private mobileLimit() {
-    if (!isMemoryConstrainedDevice()) return false;
-    if (!mobileBoardLimitReached(this.field.cellData.numberStorage.size, this.field.clickScores.length)) return false;
-    this.pause("Paused: mobile memory safety limit reached. Saving progress. Use a desktop for larger games; reloading will not remove this limit.");
-    return true;
+  private reschedule() {
+    clearTimeout(this.timer);
+    this.lastStep = this.rateStarted = performance.now();
+    this.rateCount = this.count;
+    this.busyMs = 0;
+    this.batches = 0;
+    if (this.actualRate) this.actualRate.textContent = "Actual 0 /s";
+    this.schedule();
+  }
+
+  private checkMemory(now: number, starting = false) {
+    if (starting || now - this.memoryChecked >= 1000) {
+      this.memoryChecked = now;
+      const heap = (performance as Performance & { memory?: HeapUsage }).memory;
+      const fraction = reportedHeapFraction(heap);
+      this.hasHeapTelemetry = fraction !== undefined;
+      if (this.memoryGuard.check(heap) && fraction !== undefined) {
+        this.pause(
+          `Paused: browser-reported heap is ${formatInteger(100 * fraction)}% full. Saving progress in this browser.`,
+        );
+        return true;
+      }
+    }
+
+    if (!this.hasHeapTelemetry && isMemoryConstrainedDevice()) {
+      const cells = this.field.cellData.numberStorage.size;
+      const clicks = this.field.clickScores.length;
+      if (mobileBoardLimitReached(cells, clicks)) {
+        this.pause(
+          `Paused: mobile memory safety limit reached (${formatInteger(cells)} stored cells, ${formatInteger(clicks)} clicks). This browser does not report heap usage. Saving progress in this browser.`,
+        );
+        return true;
+      }
+    }
+    return false;
   }
 
   private start() {
-    if (this.running || this.mobileLimit()) return;
+    if (this.running || this.checkMemory(performance.now(), true)) return;
     this.running = true;
+    this.rememberPlayback();
     renderQuality(this.field).update({
       running: true,
       target: this.clicksPerSecond,
     });
-    this.lastStep = performance.now();
-    this.rateStarted = this.lastStep;
-    this.rateCount = this.count;
-    this.busyMs = 0;
-    this.batches = 0;
     this.toggleButton.setAttribute("aria-checked", "true");
     this.playbackLabel.textContent = "Running";
     this.status.setAttribute("class", "sr-only");
     this.status.textContent = "Auto-playing";
-    this.schedule();
+    this.reschedule();
   }
 
   private pause(
@@ -164,35 +248,38 @@ export class AutoPlayer {
     flush = true,
   ) {
     this.running = false;
-    this.wakeGeneration++;
+    this.suspended = false;
+    this.cancelWake();
+    this.rememberPlayback();
     renderQuality(this.field).update({ running: false });
-    clearTimeout(this.timer);
     this.toggleButton.setAttribute("aria-checked", "false");
     this.playbackLabel.textContent = "Paused";
-    this.status.setAttribute("class", message.startsWith("Paused:") && !message.includes("page is hidden") ? "safety-status" : "sr-only");
+    this.status.setAttribute(
+      "class",
+      message.startsWith("Paused:") ||
+        message.startsWith("Paused before guessing")
+        ? "safety-status"
+        : "sr-only",
+    );
     this.status.textContent = message;
     if (this.actualRate) this.actualRate.textContent = "Actual 0 /s";
     if (flush) this.field.emit("playbackPaused");
   }
 
   private tick() {
-    if (!this.running) return;
+    if (!this.running || this.suspended) return;
     try {
-      if (this.mobileLimit()) return;
+      const hidden = document.hidden;
       const now = performance.now();
-      if (now - this.memoryChecked >= 1000) {
-        this.memoryChecked = now;
-        if (this.memoryGuard.check((performance as Performance & {memory?:HeapUsage}).memory)) {
-          this.pause("Paused: browser memory is nearly full. Saving progress; reload before continuing.");
-          return;
-        }
-      }
-      const interval = 1000 / this.clicksPerSecond;
+      if (this.checkMemory(now)) return;
+      const rate = this.clicksPerSecond;
+      const interval = 1000 / rate;
+      if (hidden) this.lastStep = Math.max(this.lastStep, now - 1000);
       // Batch high speeds to avoid the browser's nested timer minimum, while
       // yielding regularly so pause buttons and camera animation stay responsive.
       const due = Math.min(
         Math.floor((now - this.lastStep) / interval),
-        Math.ceil(this.clicksPerSecond / 10),
+        Math.ceil(rate / 10),
       );
       let lastVisual: { x: number; y: number } | undefined;
       for (let i = 0; i < due; i++) {
@@ -237,8 +324,7 @@ export class AutoPlayer {
         }
         this.near = { x: move.x, y: move.y };
         lastVisual = { x: move.x, y: move.y };
-        if (this.clicksPerSecond < 128)
-          this.field.emit("autoClick", lastVisual);
+        if (!hidden && rate < 128) this.field.emit("autoClick", lastVisual);
         this.click(move.x, move.y);
         this.count++;
         this.lastStep += interval;
@@ -249,9 +335,13 @@ export class AutoPlayer {
           break;
         }
       }
-      if (lastVisual && this.clicksPerSecond >= 128)
+      if (!hidden && lastVisual && rate >= 128)
         this.field.emit("autoClick", lastVisual);
       this.field.emit("autoBatchFinished");
+      if (hidden || !this.running) {
+        if (this.running) this.schedule();
+        return;
+      }
       this.busyMs += performance.now() - now;
       this.batches++;
       const elapsed = performance.now() - this.rateStarted;

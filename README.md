@@ -17,10 +17,14 @@ Open http://127.0.0.1:5173. On macOS, you can also double-click `start.command`;
 
 ## Controls
 
-- **Space:** toggle auto-play. Opening, refreshing, or starting a new game always begins paused.
+- **Space:** toggle auto-play. A new tab, manual refresh, or new game begins paused.
 - **Speed:** powers of two from 1 to 65,536 operations per second. The actual rate is displayed separately.
 - **Probability overlay:** toggle risk markers; hold **F** to temporarily invert visibility.
-- **Auto-pan:** follow operations near the screen edge, preserving zoom. Drag to pan and use the wheel to zoom.
+- **Pan:** scroll with two fingers or drag the board with the left or middle mouse button.
+- **Zoom:** use a mouse wheel, pinch on a trackpad or touchscreen, or scroll while holding Ctrl or Command.
+- **Open or flag:** left click or tap to open. Right click or hold a finger on the board to flag.
+- **Auto-pan:** follow operations near the screen edge, preserving zoom. Manual camera input temporarily takes priority.
+- **Background play:** an active game keeps using the selected click speed when you switch tabs. Browsers can throttle or suspend hidden tabs, especially on mobile. Play resumes after a freeze or a browser-reported tab discard if it was running beforehand.
 - **Pause before guessing:** exhaust known deterministic moves across the board before pausing ahead of a risky move.
 - **Mobile:** playback stays in a compact bar. Open Controls for settings; the bottom chart buttons show one chart at a time. Hidden charts skip rendering.
 - **Menu:** start a new game or enter fullscreen.
@@ -53,7 +57,14 @@ npm run test:run
 npm run build
 ```
 
-The production build is written to `dist/`. To replay a JSON board fixture in the optional solver benchmark:
+The production build is written to `dist/`. To run the browser tests with Node.js 20 or newer:
+
+```sh
+npx playwright install chromium
+npm run test:browser
+```
+
+To replay a JSON board fixture in the optional solver benchmark:
 
 ```sh
 PERF_BOARD=/absolute/path/board.json npm run test:run -- src/Performance.test.ts
@@ -65,7 +76,7 @@ Built with TypeScript, Pixi.js, Vite, D3 zoom, and GreenSock. Original authorshi
 
 ## GitHub Actions
 
-The Validate workflow checks pull requests. Every push to `master` runs the same type checks, tests, and build in the Pages workflow before publishing `dist/`; validation is not duplicated across two push workflows.
+The Validate workflow checks pull requests. Every push to `master` runs the same type checks, unit tests, production build, and browser tests in the Pages workflow before publishing `dist/`; validation is not duplicated across two push workflows.
 
 ### Publish your own fork
 
@@ -106,16 +117,18 @@ When the browser exposes heap telemetry, auto-play pauses after two consecutive 
 
 ### Mobile memory safety
 
-Mobile browsers (including iOS Edge and iPadOS desktop mode) pause automatic
-play at 200,000 stored cells or 250,000 click-history entries. This is a
-conservative growth budget, not measured available RAM and not a guarantee
-against OS termination. The pause requests a save and shows a visible notice;
-reloading does not reset the budget. Desktop games retain existing behavior.
+When a browser exposes usable heap telemetry, the measured heap budget controls
+automatic pauses, including on mobile. iOS Edge and other mobile browsers without
+heap telemetry use a fallback of 250,000 stored cells or 250,000 click-history
+entries. Stored cells include generated neighbors, so the count can be higher
+than the score or the number of clicks. The pause notice shows the applicable
+reason and requests a save in the current browser. Browser saves are not shared
+between devices, and refreshing does not reduce the size of the saved board.
+
 Mobile saves keep incremental journals without background full-board compaction,
-which would otherwise reconstruct an additional board in a worker. Initial
-rendering streams cells without creating full-board intermediate arrays; the
-appearance and loading flow are unchanged. Real-device iOS crash validation
-remains necessary.
+which would otherwise reconstruct an additional board in a worker. Statistics
+derive changes from the board state instead of retaining two additional per-cell
+lookup maps. Real-device iOS crash validation remains necessary.
 
 ### Loading
 

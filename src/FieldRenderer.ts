@@ -105,6 +105,19 @@ export class FieldRenderer extends PIXI.Application {
     field.on("cellChanged", (cell: Cell) => {
       pending.set(`${cell.x},${cell.y}`, cell);
     });
+    let backgroundChanges = false;
+    const cacheBackgroundChanges = () => {
+      if (!document.hidden || !pending.size) return;
+      // Hidden tabs do not get regular animation frames. Drain each batch
+      // into overview tiles and defer sprite work and uploads until visible.
+      for (const cell of pending.values()) {
+        this.updateOverview(cell);
+        this.detailParent(cell).dirty = true;
+      }
+      pending.clear();
+      backgroundChanges = true;
+    };
+    field.on("autoBatchFinished", cacheBackgroundChanges);
     const profile = renderQuality(field);
     try {
       const saved = JSON.parse(
@@ -116,6 +129,7 @@ export class FieldRenderer extends PIXI.Application {
     }
     const activeAnimations = new Map<CellSprite, number>();
     this.flushPending = () => {
+      if (document.hidden) return;
       const quality = profile.current;
       if (this.ticker.maxFPS !== quality.maxFPS)
         this.ticker.maxFPS = quality.maxFPS;
@@ -128,7 +142,7 @@ export class FieldRenderer extends PIXI.Application {
         if (!quality.animateCells || now >= expires)
           activeAnimations.delete(sprite);
       }
-      if (!pending.size) {
+      if (!pending.size && !backgroundChanges) {
         field.emit("renderFrame", now);
         return;
       }
@@ -139,6 +153,7 @@ export class FieldRenderer extends PIXI.Application {
         if (animate && sprite) activeAnimations.set(sprite, now + 250);
       }
       pending.clear();
+      backgroundChanges = false;
       this.overview.flush();
       updateScore(field);
       field.emit("renderFrame", now);
@@ -147,12 +162,16 @@ export class FieldRenderer extends PIXI.Application {
     this.setup();
   }
 
-  public updateCell(cell: Cell, playAnimation: boolean) {
+  private updateOverview(cell: Cell) {
     this.overview.set(
       cell.x,
       cell.y,
       overviewColor(cell, this.field.value(cell.x, cell.y)),
     );
+  }
+
+  public updateCell(cell: Cell, playAnimation: boolean) {
+    this.updateOverview(cell);
     const chunk = this.detailParent(cell);
     if (
       !this.canvasReady ||
@@ -248,6 +267,12 @@ export class FieldRenderer extends PIXI.Application {
   public setupAfterCanvasReady() {
     this.canvasReady = true;
     this.ticker.add(this.flushPending);
-    new Controls(this.clickHandler, this.field, this.fieldPersistence);
+    this.canvas.id = "minefield";
+    new Controls(
+      this.canvas,
+      this.clickHandler,
+      this.field,
+      this.fieldPersistence,
+    );
   }
 }

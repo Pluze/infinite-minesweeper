@@ -12,7 +12,9 @@
     "start": "vite --host 127.0.0.1 --port 5173 --strictPort --open",
     "build": "vite build",
     "test:run": "vitest run",
-    "typecheck": "tsc --noEmit --skipLibCheck"
+    "typecheck": "tsc --noEmit --skipLibCheck",
+    "test:browser": "playwright test",
+    "preview": "vite preview"
   },
   "repository": {
     "type": "git",
@@ -59,6 +61,7 @@
     "zod": "^3.23.8"
   },
   "devDependencies": {
+    "@playwright/test": "^1.65.1",
     "fake-indexeddb": "^6.2.8"
   }
 }

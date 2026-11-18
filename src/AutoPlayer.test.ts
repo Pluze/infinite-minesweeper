@@ -1,6 +1,7 @@
 import { frontierIndex } from "./FrontierIndex";
 import { probabilityModel } from "./MineProbability";
 import { describe, it, expect, afterEach, vi } from "vitest";
+import { MOBILE_CELL_LIMIT } from "./MemoryPressure";
 import { Field } from "./Field";
 import { AutoPlayer, findNumberMove } from "./AutoPlayer";
 
@@ -58,11 +59,16 @@ describe("automatic number clicks", () => {
 
 describe("playback controls", () => {
   afterEach(() => {
+    Reflect.deleteProperty(performance, "memory");
     vi.useRealTimers();
     vi.unstubAllGlobals();
   });
 
-  function setup(rate = "4", initial?: Field) {
+  function setup(
+    rate = "4",
+    initial?: Field,
+    restored?: { discarded: boolean; active: boolean },
+  ) {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
     const elements = new Map<
       string,
@@ -97,16 +103,45 @@ describe("playback controls", () => {
     }
     const listeners = new Map<string, (event: unknown) => void>();
     vi.stubGlobal("document", {
+      hidden: false,
+      wasDiscarded: restored?.discarded ?? false,
       querySelector: (id: string) => elements.get(id),
       addEventListener: (name: string, callback: (event: unknown) => void) =>
         listeners.set(name, callback),
     });
-    vi.stubGlobal("localStorage", { getItem: () => rate, setItem: vi.fn() });
+    vi.stubGlobal("window", {
+      addEventListener: (name: string, callback: (event: unknown) => void) =>
+        listeners.set(name, callback),
+    });
+    vi.stubGlobal("MessageChannel", undefined);
+    // Old installs may have left the now-removed preference off.
+    const settings = new Map([
+      ["autoClickSpeed", rate],
+      ["autoPlayInBackground", "off"],
+    ]);
+    vi.stubGlobal("localStorage", {
+      getItem: (key: string) => settings.get(key) ?? null,
+      setItem: (key: string, value: string) => settings.set(key, value),
+    });
+    const session = new Map<string, string>();
+    if (restored?.active) session.set("activeBackgroundPlayback", "on");
+    vi.stubGlobal("sessionStorage", {
+      getItem: (key: string) => session.get(key) ?? null,
+      setItem: (key: string, value: string) => session.set(key, value),
+      removeItem: (key: string) => session.delete(key),
+    });
+    const setHidden = (hidden: boolean) => {
+      Object.defineProperty(document, "hidden", {
+        value: hidden,
+        configurable: true,
+      });
+      listeners.get("visibilitychange")!(undefined);
+    };
     const field = initial ?? new Field(0.2, 3, "controls", "1");
     if (!initial) field.open(1, 1);
     const click = vi.fn();
     new AutoPlayer(field, click);
-    return { elements, click, listeners, field };
+    return { elements, click, listeners, field, settings, setHidden, session };
   }
 
   it.each([false, true])(
@@ -211,6 +246,83 @@ describe("playback controls", () => {
     expect(click).toHaveBeenCalledTimes(4);
   });
 
+  it("uses the selected speed in both a visible and a hidden tab, even with the old preference off", () => {
+    const { elements, field, click, setHidden } = setup("512");
+    const flash = vi.fn();
+    field.on("autoClick", flash);
+    elements.get("#auto-toggle")!.onclick!();
+    vi.advanceTimersByTime(1000);
+    expect(click).toHaveBeenCalledTimes(512);
+    flash.mockClear();
+
+    setHidden(true);
+    vi.advanceTimersByTime(1000);
+    expect(click).toHaveBeenCalledTimes(1024);
+    expect(flash).not.toHaveBeenCalled();
+    expect(elements.get("#playback-label")!.textContent).toBe("Running");
+
+    setHidden(false);
+    vi.advanceTimersByTime(3);
+    expect(click).toHaveBeenCalledTimes(1024);
+    vi.advanceTimersByTime(1);
+    expect(click).toHaveBeenCalledTimes(1026);
+    expect(flash).toHaveBeenCalledOnce();
+  });
+
+  it("saves and stops when the document is left without caching", () => {
+    const { elements, click, listeners, field, setHidden, session } = setup();
+    const save = vi.fn();
+    field.on("playbackPaused", save);
+    elements.get("#auto-toggle")!.onclick!();
+    setHidden(true);
+    vi.advanceTimersByTime(250);
+    listeners.get("pagehide")!({ persisted: false });
+    vi.advanceTimersByTime(1000);
+    expect(click).toHaveBeenCalledTimes(1);
+    expect(save).toHaveBeenCalledOnce();
+    expect(session.has("activeBackgroundPlayback")).toBe(false);
+    expect(elements.get("#playback-label")!.textContent).toBe("Paused");
+  });
+
+  it.each([
+    { discarded: true, active: true, expected: 1 },
+    { discarded: false, active: true, expected: 0 },
+    { discarded: true, active: false, expected: 0 },
+  ])(
+    "resumes a discarded tab only if it was playing ($discarded, $active)",
+    ({ discarded, active, expected }) => {
+      const { click, session } = setup("4", undefined, { discarded, active });
+      vi.advanceTimersByTime(250);
+      expect(click).toHaveBeenCalledTimes(expected);
+      expect(session.has("activeBackgroundPlayback")).toBe(expected === 1);
+    },
+  );
+
+  it("retains playback across cached page restoration and clears it on manual pause", () => {
+    const { elements, click, field, listeners, session, setHidden } = setup();
+    const save = vi.fn();
+    field.on("playbackSuspended", save);
+    elements.get("#auto-toggle")!.onclick!();
+    expect(session.get("activeBackgroundPlayback")).toBe("on");
+    setHidden(true);
+    listeners.get("pagehide")!({ persisted: true });
+    listeners.get("freeze")!(undefined);
+    vi.advanceTimersByTime(60000);
+    expect(click).not.toHaveBeenCalled();
+    expect(save).toHaveBeenCalledOnce();
+
+    setHidden(false);
+    listeners.get("resume")!(undefined);
+    listeners.get("pageshow")!({ persisted: true });
+    vi.advanceTimersByTime(250);
+    expect(click).toHaveBeenCalledOnce();
+
+    elements.get("#auto-toggle")!.onclick!();
+    expect(session.has("activeBackgroundPlayback")).toBe(false);
+    vi.advanceTimersByTime(1000);
+    expect(click).toHaveBeenCalledOnce();
+  });
+
   it("Space toggles playback once per press without activating focused controls", () => {
     const { click, listeners, elements } = setup();
     const key = {
@@ -291,19 +403,63 @@ describe("playback controls", () => {
     expect(click.mock.calls.length).toBeGreaterThanOrEqual(500);
     expect(click.mock.calls.length).toBeLessThanOrEqual(512);
   });
+  it("uses the live heap limit in mobile browsers that report memory", () => {
+    vi.stubGlobal("navigator", {
+      userAgent: "Mozilla Android",
+      platform: "Linux",
+      maxTouchPoints: 5,
+    });
+    const { elements, click, field, setHidden } = setup();
+    vi.spyOn(field.cellData.numberStorage, "size", "get").mockReturnValue(
+      MOBILE_CELL_LIMIT + 1,
+    );
+    const usage = { usedJSHeapSize: 870, jsHeapSizeLimit: 2000 };
+    Object.defineProperty(performance, "memory", {
+      value: usage,
+      configurable: true,
+    });
+    elements.get("#auto-toggle")!.onclick!();
+    setHidden(true);
+    vi.advanceTimersByTime(1000);
+    expect(click).toHaveBeenCalledTimes(4);
+
+    // The same number of used bytes is now a higher share of the reported budget.
+    usage.jsHeapSizeLimit = 1000;
+    vi.advanceTimersByTime(1000);
+    expect(click).toHaveBeenCalledTimes(8);
+    vi.advanceTimersByTime(1000);
+    expect(click).toHaveBeenCalledTimes(11);
+    expect(elements.get("#auto-status")!.textContent).toContain("87% full");
+    expect(elements.get("#playback-label")!.textContent).toBe("Paused");
+  });
+
   it("prevents mobile growth before a click and visibly explains the saved pause", () => {
-    vi.stubGlobal("navigator", {userAgent: "iPhone EdgiOS", platform: "iPhone", maxTouchPoints: 5});
-    const {elements, click, field} = setup();
-    vi.spyOn(field.cellData.numberStorage, "size", "get").mockReturnValue(200000);
-    const save = vi.fn(); field.on("playbackPaused", save);
+    vi.stubGlobal("navigator", {
+      userAgent: "iPhone EdgiOS",
+      platform: "iPhone",
+      maxTouchPoints: 5,
+    });
+    const { elements, click, field } = setup();
+    vi.spyOn(field.cellData.numberStorage, "size", "get").mockReturnValue(
+      MOBILE_CELL_LIMIT,
+    );
+    const save = vi.fn();
+    field.on("playbackPaused", save);
     elements.get("#auto-toggle")!.onclick!();
     vi.advanceTimersByTime(1000);
     expect(click).not.toHaveBeenCalled();
     expect(save).toHaveBeenCalledOnce();
-    expect(elements.get("#auto-status")!.textContent).toContain("mobile memory safety limit");
-    expect(elements.get("#auto-status")!.setAttribute).toHaveBeenCalledWith("class", "safety-status");
+    expect(elements.get("#auto-status")!.textContent).toContain(
+      "mobile memory safety limit",
+    );
+    expect(elements.get("#auto-status")!.textContent).toContain(
+      "Saving progress in this browser.",
+    );
+    expect(elements.get("#auto-status")!.setAttribute).toHaveBeenCalledWith(
+      "class",
+      "safety-status",
+    );
     elements.get("#auto-toggle")!.onclick!();
     expect(click).not.toHaveBeenCalled();
   });
-
 });

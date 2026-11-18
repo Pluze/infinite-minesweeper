@@ -6,26 +6,28 @@ import { AutoPlayer } from "./AutoPlayer";
 import { CELL_WIDTH } from "./CellSprite";
 import { Cursor } from "./Cursor";
 import * as PIXI from "pixi.js";
-import { zoom, zoomTransform, ZoomTransform } from "d3-zoom";
-import { select } from "d3-selection";
-import { z } from "zod";
+import { D3ZoomEvent, zoom, zoomTransform, ZoomTransform } from "d3-zoom";
+import { pointer, select } from "d3-selection";
 import { Field } from "./Field";
 import { FieldPersistence } from "./FieldPersistence";
 import { assert } from "./assert";
 import { WorldPos } from "./CoordTypes";
+import { WheelInput } from "./WheelInput";
 
-// todo add setting for long press duration
-const LONG_PRESS_DURATION = 200; // Duration in milliseconds to consider it a long press
+const LONG_PRESS_DURATION = 200;
+const MOUSE_CLICK_DISTANCE = 4;
+const TOUCH_TAP_DISTANCE = 8;
+
+type PinchEvent = MouseEvent & { scale: number };
 
 export class Controls {
   private static saver: BatchedSave;
   private static center: (x: number, y: number) => void;
   private static cursor: Cursor;
   private static field: Field;
-  private static fieldStorage: FieldPersistence | undefined;
-  private static skipEventTimer: NodeJS.Timeout | null = null;
 
   public constructor(
+    canvas: HTMLCanvasElement,
     rootObject: PIXI.Container,
     field: Field,
     fieldStorage: FieldPersistence,
@@ -36,7 +38,6 @@ export class Controls {
     reducedMotion.addEventListener("change", () =>
       renderQuality(field).update({ reducedMotion: reducedMotion.matches }),
     );
-    Controls.fieldStorage = fieldStorage;
     Controls.saver = new BatchedSave(
       () => fieldStorage.saveAsync(field, field.fieldName),
       (error) => {
@@ -48,7 +49,6 @@ export class Controls {
     document.addEventListener("visibilitychange", () => {
       if (document.hidden) Controls.saver.flush();
     });
-    field.on("playbackPaused", () => Controls.saver.flush());
     field.on("beforeRestart", () => Controls.saver.discard());
 
     Controls.cursor = new Cursor();
@@ -56,25 +56,23 @@ export class Controls {
     assert(foreground);
     foreground.addChild(Controls.cursor);
 
-    Controls.setupZoom(rootObject);
-    Controls.disableRightClickContextMenu();
+    Controls.setupZoom(canvas, rootObject);
     field.on("autoBatchFinished", () => Controls.finishBatch());
-    field.on("playbackPaused", () => {
+    const flushPlaybackProgress = () => {
       Controls.finishBatch();
       Controls.saver.flush();
-    });
+    };
+    field.on("playbackPaused", flushPlaybackProgress);
+    field.on("playbackSuspended", flushPlaybackProgress);
     new AutoPlayer(field, (x, y) => Controls.openAt(x, y));
   }
 
-  private static disableRightClickContextMenu() {
-    document.addEventListener("contextmenu", (event) => event.preventDefault());
-  }
-
-  private static setupZoom(rootObject: PIXI.Container) {
+  private static setupZoom(
+    canvas: HTMLCanvasElement,
+    rootObject: PIXI.Container,
+  ) {
     // We have to get this before setting up zoom so we don't show the zoomed out version for some frames after it has been created.
     const savedTransform = savedCameraTransform.get();
-
-    const logEvent = (_event: Event) => {};
 
     let cameraFrame = 0;
     let cameraMoving = false;
@@ -85,6 +83,12 @@ export class Controls {
       cancelAnimationFrame(cameraFrame);
       cameraMoving = false;
     };
+    document.addEventListener("visibilitychange", () => {
+      if (document.hidden) {
+        stopCameraAnimation();
+        pendingRegion = "";
+      }
+    });
     let lastCameraStart = -Infinity;
     const autoPanToggle =
       document.querySelector<HTMLInputElement>("#auto-center");
@@ -97,150 +101,232 @@ export class Controls {
         if (!autoPan) stopCameraAnimation();
       };
     }
-    const zoomHandler = zoom()
-      .on("start", (event) => {
+    const container = rootObject.getChildByLabel("container");
+    const background = rootObject.getChildByLabel("bg") as PIXI.TilingSprite;
+    const foreground = container?.getChildByLabel("fg");
+    assert(container && background && foreground);
+
+    const selection = select<HTMLCanvasElement, unknown>(canvas);
+    const currentTransform = () => zoomTransform(canvas);
+    let restarting = false;
+    const cameraSaver = new BatchedSave(
+      () => savedCameraTransform.set(currentTransform()),
+      console.error,
+      150,
+    );
+    window.addEventListener("pagehide", () => cameraSaver.flush());
+    Controls.field.on("beforeRestart", () => {
+      restarting = true;
+      stopCameraAnimation();
+      cameraSaver.discard();
+    });
+
+    const manualCameraInput = () => {
+      stopCameraAnimation();
+      pendingRegion = "";
+      manualUntil = performance.now() + 1500;
+    };
+    let dragging = false;
+    let pinchScale: number | undefined;
+    const zoomHandler = zoom<HTMLCanvasElement, unknown>()
+      .clickDistance(MOUSE_CLICK_DISTANCE)
+      .filter(
+        (event) => !event.ctrlKey && (!event.button || event.button === 1),
+      )
+      .on("start", (event: D3ZoomEvent<HTMLCanvasElement, unknown>) => {
         if (event.sourceEvent) {
-          stopCameraAnimation();
-          manualUntil = performance.now() + 1500;
+          dragging = true;
+          manualCameraInput();
         }
       })
-      .on("zoom", (rawEvent) => {
-        logEvent(rawEvent);
-        const event = eventSchema.parse(rawEvent);
-
-        const container = rootObject.getChildByLabel(
-          "container",
-        ) as PIXI.Sprite;
-        const foreground = container.getChildByLabel("fg") as PIXI.Sprite;
-        const background = rootObject.getChildByLabel(
-          "bg",
-        ) as PIXI.TilingSprite;
-
-        const x = event.transform.x;
-        const y = event.transform.y;
-        const scale = event.transform.k;
-        renderQuality(Controls.field).update({ scale });
+      .on("end", (event: D3ZoomEvent<HTMLCanvasElement, unknown>) => {
+        if (event.sourceEvent) {
+          dragging = false;
+          manualCameraInput();
+        }
+      })
+      .on("zoom", (event: D3ZoomEvent<HTMLCanvasElement, unknown>) => {
+        if (event.sourceEvent) manualCameraInput();
+        const { x, y, k } = event.transform;
+        renderQuality(Controls.field).update({ scale: k });
 
         container.position.set(x, y);
-        container.scale.set(scale);
+        container.scale.set(k);
         background.tilePosition.set(x, y);
-        background.tileScale.set(scale);
-        function lerp(a: number, b: number, alpha: number): number {
-          return a + alpha * (b - a);
-        }
-        const lerpedScale = lerp(-1, 0.5, scale);
-        background.alpha = lerpedScale;
-        foreground.alpha = lerpedScale;
-
-        // todo dedupe between touchend
-        if (longPressTimer) {
-          clearTimeout(longPressTimer);
-          longPressTimer = null;
-        }
-
-        savedCameraTransform.set(event.transform);
+        background.tileScale.set(k);
+        background.alpha = foreground.alpha = -1 + 1.5 * k;
+        if (!restarting) cameraSaver.request();
       });
-    // todo when pressing mousedown, then i want to update the cell sprite to be from closed to open. This is both when pressing down(before releasing) on a closed cell, and on an open cell with a closed unflagged neighbor
-    // todo add option to pan using middle mouse button, which allows us to enable immediate mode on left and right click.
-    // todo enable immediate mode on right click, because we are not using it to flag
-    // todo allow switching what the mouse buttons does, we have the actions: pan, chord open, chord flag, open, flag. these actions can be assigned to mouse right, mouse left, middle mouse click, or optionally keyboard buttons.
-    // todo try to create a new mode where we are locking the mouse to the center of the screen, and move the whole field in addition to the cursor when we move the cursor. Then we can open with mouse click. We need to be able to unlock the mouse using escape.
 
-    let longPressTimer: NodeJS.Timeout | null = null;
+    const moveCursorTo = ([x, y]: [number, number]) => {
+      const point = container.toLocal({ x, y }) as WorldPos;
+      Controls.cursor.moveTo(point.x, point.y);
+    };
+    const moveCursor = (event: MouseEvent | Touch) =>
+      moveCursorTo(pointer(event, canvas));
+    let lastMousePoint: [number, number] | undefined;
+    const zoomFromWheel = (event: WheelEvent) => {
+      const sensitivity =
+        event.deltaMode === 1 ? 0.05 : event.deltaMode === 2 ? 1 : 0.002;
+      const exponent = -event.deltaY * sensitivity * (event.ctrlKey ? 10 : 1);
+      zoomHandler.scaleBy(selection, 2 ** exponent, pointer(event, canvas));
+    };
+    const panFromScroll = (event: WheelEvent) => {
+      const from = currentTransform();
+      const lineHeight = 16;
+      const dx =
+        event.deltaX *
+        (event.deltaMode === 1
+          ? lineHeight
+          : event.deltaMode === 2
+            ? canvas.clientWidth
+            : 1);
+      const dy =
+        event.deltaY *
+        (event.deltaMode === 1
+          ? lineHeight
+          : event.deltaMode === 2
+            ? canvas.clientHeight
+            : 1);
+      zoomHandler.transform(
+        selection,
+        new ZoomTransform(from.k, from.x - dx, from.y - dy),
+      );
+    };
 
-    const selection = select<Element, unknown>("canvas")
-      .on("touchstart", (event: TouchEvent) => {
-        logEvent(event);
+    const wheelInput = new WheelInput((action, event) => {
+      manualCameraInput();
+      if (action === "pan") panFromScroll(event);
+      else zoomFromWheel(event);
+      moveCursor(event);
+    });
+    Controls.field.on("beforeRestart", () => wheelInput.reset());
+    let tap: { start: Touch; timer: ReturnType<typeof setTimeout> } | undefined;
+    const cancelTap = () => {
+      if (tap) clearTimeout(tap.timer);
+      tap = undefined;
+    };
+    const isTapDistance = (start: Touch, end: Touch | undefined) =>
+      end?.identifier === start.identifier &&
+      Math.hypot(end.clientX - start.clientX, end.clientY - start.clientY) <=
+        TOUCH_TAP_DISTANCE;
+    window.addEventListener("blur", () => {
+      cancelTap();
+      wheelInput.reset();
+      pinchScale = undefined;
+      dragging = false;
+    });
 
-        if (Controls.skipEventTimer) {
-          clearTimeout(Controls.skipEventTimer);
-          Controls.skipEventTimer = null;
-        }
-
-        if (event.touches.length > 1) return;
-
-        const touchPosition = event.touches[0];
-
-        // todo dedup between mousemove.
-        assert(typeof touchPosition.clientX === "number");
-        assert(typeof touchPosition.clientY === "number");
-        const foreground = rootObject.getChildByLabel("container");
-        assert(foreground);
-        const worldPos = foreground.toLocal({
-          x: touchPosition.clientX,
-          y: touchPosition.clientY,
-        }) as WorldPos;
-
-        longPressTimer = setTimeout(() => {
-          Controls.cursor.moveTo(worldPos.x, worldPos.y);
-          Controls.flag();
-
-          /**
-           * Workaround: On mobile devices, when a long press is done and
-           * released before 300ms, a `mouseup` and `click` event is fired. This
-           * is expected for a short tap, but if we tap for a duration which is
-           * longer than LONG_PRESS_DURATION but shorter than the 300 ms, we
-           * will both trigger a long press and a short press. We create a timer
-           * to disable this long press event which is created by the dom, and
-           * clear this if another touch event starts.
-           */
-          Controls.skipEventTimer = setTimeout(() => {
-            Controls.skipEventTimer = null;
-          }, 200);
-        }, LONG_PRESS_DURATION);
+    selection
+      .on(
+        "touchstart.board",
+        (event: TouchEvent) => {
+          // We handle taps directly. Prevent touch from synthesizing mouse clicks.
+          event.preventDefault();
+          cancelTap();
+          if (event.touches.length !== 1) return;
+          const start = event.touches[0];
+          tap = {
+            start,
+            timer: setTimeout(() => {
+              cancelTap();
+              moveCursor(start);
+              Controls.flag();
+            }, LONG_PRESS_DURATION),
+          };
+        },
+        { passive: false },
+      )
+      .on("touchmove.board", (event: TouchEvent) => {
+        if (tap && !isTapDistance(tap.start, event.touches[0])) cancelTap();
       })
-      .on("touchend", (e) => {
-        logEvent(e);
-        if (longPressTimer) {
-          clearTimeout(longPressTimer);
-          longPressTimer = null;
+      .on("touchend.board", (event: TouchEvent) => {
+        const end = event.changedTouches[0];
+        const shouldOpen =
+          tap && !event.touches.length && isTapDistance(tap.start, end);
+        cancelTap();
+        if (shouldOpen) {
+          moveCursor(end);
+          Controls.open();
         }
       })
-      .on("click", (e) => {
-        if (Controls.skipEventTimer) {
-          e.stopImmediatePropagation();
-          return;
-        }
-        logEvent(e);
-        const foreground = rootObject.getChildByLabel("container")!;
-        const point = foreground.toLocal({
-          x: e.clientX,
-          y: e.clientY,
-        }) as WorldPos;
-        Controls.cursor.moveTo(point.x, point.y);
+      .on("touchcancel.board", cancelTap)
+      .on("click.board", (event: PointerEvent) => {
+        if (event.pointerType === "touch") return;
+        moveCursor(event);
         Controls.open();
       })
-      .on("mouseup", (e: MouseEvent) => {
-        if (Controls.skipEventTimer) {
-          e.stopImmediatePropagation();
-          return;
-        }
-        logEvent(e);
-        if (e.button === 2) Controls.flag();
+      .on("mouseup.board", (event: MouseEvent) => {
+        if (event.button !== 2) return;
+        moveCursor(event);
+        Controls.flag();
       })
-      .on("mousemove", (event: MouseEvent) => {
-        logEvent(event);
-        assert(typeof event.x === "number");
-        assert(typeof event.y === "number");
-        const foreground = rootObject.getChildByLabel("container");
-        assert(foreground);
-        const worldPos = foreground.toLocal(event) as WorldPos;
-
-        Controls.cursor.moveTo(worldPos.x, worldPos.y);
+      .on("mousemove.board", (event: MouseEvent) => {
+        lastMousePoint = pointer(event, canvas);
+        moveCursorTo(lastMousePoint);
       })
+      .on("contextmenu.board", (event) => event.preventDefault())
       .call(zoomHandler)
-      .on("dblclick.zoom", null);
+      .on("dblclick.zoom wheel.zoom", null)
+      .on(
+        "wheel.camera",
+        (event: WheelEvent) => {
+          event.preventDefault();
+          // Safari can send separate gesture events for the same pinch.
+          if (!restarting && pinchScale === undefined) wheelInput.handle(event);
+        },
+        { passive: false },
+      );
+    canvas.addEventListener("gesturestart", (event) => {
+      event.preventDefault();
+      if (dragging) return;
+      wheelInput.reset();
+      manualCameraInput();
+      pinchScale = 1;
+    });
+    canvas.addEventListener("gesturechange", (rawEvent) => {
+      const event = rawEvent as PinchEvent;
+      event.preventDefault();
+      if (
+        pinchScale === undefined ||
+        !Number.isFinite(event.scale) ||
+        event.scale <= 0
+      )
+        return;
+      manualCameraInput();
+      const anchor: [number, number] =
+        Number.isFinite(event.clientX) && Number.isFinite(event.clientY)
+          ? pointer(event, canvas)
+          : (lastMousePoint ?? [
+              canvas.clientWidth / 2,
+              canvas.clientHeight / 2,
+            ]);
+      zoomHandler.scaleBy(selection, event.scale / pinchScale, anchor);
+      pinchScale = event.scale;
+      moveCursorTo(anchor);
+    });
+    canvas.addEventListener("gestureend", (event) => {
+      event.preventDefault();
+      if (pinchScale === undefined) return;
+      manualCameraInput();
+      pinchScale = undefined;
+    });
 
-    new ClickFlash(Controls.field, () => zoomTransform(selection.node()!));
-    new ProbabilityOverlay(Controls.field, () =>
-      zoomTransform(selection.node()!),
-    );
+    new ClickFlash(Controls.field, currentTransform);
+    new ProbabilityOverlay(Controls.field, currentTransform);
 
     Controls.center = (x, y) => {
-      if (!autoPan || cameraMoving || performance.now() < manualUntil) return;
-      const canvas = selection.node();
-      if (!canvas) return;
-      const from = zoomTransform(canvas);
+      if (
+        !autoPan ||
+        document.hidden ||
+        restarting ||
+        cameraMoving ||
+        dragging ||
+        pinchScale !== undefined ||
+        performance.now() < manualUntil
+      )
+        return;
+      const from = currentTransform();
       const screenX = from.x + (x + 0.5) * CELL_WIDTH * from.k;
       const screenY = from.y + (y + 0.5) * CELL_WIDTH * from.k;
       const marginX = window.innerWidth * 0.05;
@@ -317,26 +403,8 @@ export class Controls {
     }
   }
 
-  // todo create method on the parent which applies transform instead of mutating the object directly.
-  // todo add different types (maybe with brands) for the different types of transforms, because we are starting to work in a lot of different coordinate systems.
-
-  // todo i need a global camera state, and based on when the camera changes we should update foreground and background position.
-  // todo cursor is always in upper left corner
-  // todo pressing a square does nothing
-
-  // todo after restarting, the opened cell is not in the middle
-  // todo, when i load the page, then press somewhere, then it jumps to another place
-  // - todo i need to pass initial transform to controls
-
-  // todo this logic should be moved to the field. If we want custom behavior then we should save settings on the field to enable/disable multi-flagging.
   private static open() {
-    const x = Controls.cursor.getX();
-    const y = Controls.cursor.getY();
-
-    if (Controls.fieldStorage === undefined)
-      throw new Error("tried to save, but fieldstorage is undefined");
-
-    Controls.openAt(x, y);
+    Controls.openAt(Controls.cursor.getX(), Controls.cursor.getY());
   }
 
   private static pendingCenter: { x: number; y: number } | undefined;
@@ -367,13 +435,9 @@ export class Controls {
     Controls.saver.request();
   }
 
-  // todo this logic should be moved to the field. If we want custom behavior then we should save settings on the field to enable/disable multi-flagging.
   private static flag() {
     const x = Controls.cursor.getX();
     const y = Controls.cursor.getY();
-
-    if (Controls.fieldStorage === undefined)
-      throw new Error("tried to save, but fieldstorage is undefined");
 
     Controls.field.flag(x, y);
     Controls.field.recordClick();
@@ -382,24 +446,25 @@ export class Controls {
   }
 }
 
-const eventSchema = z
-  .object({
-    type: z.enum(["start", "end", "zoom"]),
-    transform: z.object({
-      k: z.number(),
-      x: z.number(),
-      y: z.number(),
-    }),
-  })
-  .passthrough();
-
 const savedCameraTransform = {
   key: "savedCamerTransform",
   get: (): CameraTransform | null => {
-    return JSON.parse(
-      (localStorage.getItem(savedCameraTransform.key) as string | null) ??
-        "null",
-    ) as CameraTransform;
+    try {
+      const transform = JSON.parse(
+        localStorage.getItem(savedCameraTransform.key) ?? "null",
+      ) as CameraTransform | null;
+      if (
+        transform &&
+        Number.isFinite(transform.x) &&
+        Number.isFinite(transform.y) &&
+        Number.isFinite(transform.k) &&
+        transform.k > 0
+      )
+        return transform;
+    } catch {
+      // A stale or malformed camera preference should not block startup.
+    }
+    return null;
   },
   set: (transform: CameraTransform): void => {
     localStorage.setItem(savedCameraTransform.key, JSON.stringify(transform));

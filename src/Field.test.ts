@@ -36,7 +36,7 @@ test("Field should be able to be constructed", () => {
 test("Field should open a cell", () => {
   // todo remove. fieldstorage doesnt get cleaned up, and this test should be in the fieldstorage suite
   new FieldPersistence(new LocalStorage("./localStorage"));
-  const field = new Field(undefined, undefined, "unitTest");
+  const field = new Field(undefined, undefined, "unitTest", "1");
   const opened = field.open(0, 0);
   assert(opened.length === 1);
   assert(opened[0].isOpen === true);
@@ -47,7 +47,7 @@ test("Field should calculate score correctly", () => {
 
   new FieldPersistence(new LocalStorage("./localStorage"));
 
-  const field = new Field(undefined, undefined, id);
+  const field = new Field(undefined, undefined, id, "1");
   expect(field.score).toBe(0);
   const opened = field.open(0, 0);
   assert(opened.length === 1);

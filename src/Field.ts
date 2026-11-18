@@ -5,13 +5,15 @@ import * as Layouts from "./Layouts";
 import * as PIXI from "pixi.js";
 import { Chunk } from "./Chunk";
 import seedrandom from "seedrandom";
-import { Cell } from "./Cell";
+import { Cell, observeCell } from "./Cell";
 import { SimpleCellData } from "./CellData";
 import { Layout } from "./Layouts";
 
 export type ChunkedField = Record<number, Record<number, Chunk>>;
 
 export const BASE_OPEN_SCORE = 1;
+
+type OpenTarget = { x: number; y: number; chordIfOpened?: boolean };
 
 export class Field extends PIXI.EventEmitter {
   public fieldData: ChunkedField;
@@ -83,102 +85,75 @@ export class Field extends PIXI.EventEmitter {
       );
 
     if (this.pristine) this.setSafeCells(x, y);
-    let cell = this.getCell(x, y);
+    const pending: OpenTarget[] = [{ x, y, chordIfOpened: true }];
+    const changed: Cell[] = [];
+    while (pending.length) {
+      const { x, y, chordIfOpened } = pending.pop()!;
+      const cell = this.getCell(x, y);
+      if (cell.isOpen) {
+        if (chordIfOpened && !cell.isMine) this.chordOpen(cell, pending, changed);
+        continue;
+      }
+      if (cell.isFlagged) continue;
 
-    if (cell.isOpen) {
-      if (cell.isMine) return [];
+      if (cell.isMine === undefined) {
+        cell.isMine = this.rng() < this.probability;
+        this._setCell(x, y, cell);
+      }
+      this._setCell(x, y, { isOpen: true });
+      cell.isOpen = true;
+
+      if (cell.isMine) {
+        this.score -= 100;
+        this.emit("cellChanged", cell);
+        continue;
+      }
+      this.score += BASE_OPEN_SCORE;
+
       const neighbors = this.getNeighbors(x, y);
-
-      const closedUnflaggedNeighbors = neighbors.filter(
-        (cell) => !cell.isFlagged && !cell.isOpen,
-      );
-
-      const value = this.value(x, y);
-      const changedCells = [];
-
-      const flaggedNeighbors = neighbors.filter(
-        (cell) => cell.isFlagged || (cell.isOpen && cell.isMine), // Open mines should be treated as flags when chording
-      );
-
-      if (flaggedNeighbors.length === value) {
-        for (const closedUnflaggedNeighbor of closedUnflaggedNeighbors) {
-          const newOpenedCells = this.open(
-            closedUnflaggedNeighbor.x,
-            closedUnflaggedNeighbor.y,
-          );
-          changedCells.push(...newOpenedCells);
+      for (const neighbor of neighbors) {
+        if (neighbor.isMine === undefined) {
+          neighbor.isMine = this.rng() < this.probability;
+          this._setCell(neighbor.x, neighbor.y, neighbor);
         }
-        return changedCells;
       }
-
-      const closedNeighbors = neighbors.filter(
-        (cell) => !cell.isOpen || (cell.isOpen && cell.isMine),
-      );
-
-      if (closedNeighbors.length === value) {
-        for (const closedUnflaggedNeighbor of closedUnflaggedNeighbors) {
-          const newFlaggedCells = this.flag(
-            closedUnflaggedNeighbor.x,
-            closedUnflaggedNeighbor.y,
-          );
-          changedCells.push(...newFlaggedCells);
-        }
-        return changedCells;
-      }
-    }
-
-    if (cell.isFlagged || cell.isOpen) {
-      return [];
-    }
-
-    if (cell.isMine === undefined) {
-      cell.isMine = this.rng() < this.probability;
-      this._setCell(cell.x, cell.y, cell);
-    }
-
-    this._setCell(x, y, { isOpen: true });
-    cell = this.getCell(x, y);
-
-    if (cell.isMine) {
-      this.score -= 100;
       this.emit("cellChanged", cell);
-      return [];
-    }
-    this.score += BASE_OPEN_SCORE;
+      changed.push(cell);
 
-    // generating of neighbors. we generate the cells when a neighbor is opened
-    const neighbors = this.getNeighbors(cell.x, cell.y);
-    for (let i = 0; i < neighbors.length; i++) {
-      const neighbor = neighbors[i];
-      if (neighbor.isMine === undefined) {
-        neighbor.isMine = this.rng() < this.probability;
-        this._setCell(neighbor.x, neighbor.y, neighbor);
-        // this.generateCell(neighbors[i].x, neighbors[i].y);
-      }
-    }
-    // we emit the event before doing the floodfill
-    this.emit("cellChanged", cell);
-
-    const openedCells = [];
-    openedCells.push(cell);
-
-    // floodfill
-    if (this.value(cell.x, cell.y) === 0) {
-      const neighbors = this.getNeighbors(cell.x, cell.y);
-      const closedNeighbors = neighbors;
-      for (const neighbor of closedNeighbors) {
-        const updatedNeighbor = this.getCell(neighbor.x, neighbor.y);
-        if (!updatedNeighbor.isOpen && !updatedNeighbor.isFlagged) {
-          const openedNeighbors = this.open(
-            updatedNeighbor.x,
-            updatedNeighbor.y,
-          );
-          openedCells.push(...openedNeighbors);
+      // Reverse the push order to preserve depth-first visitation and seeded rolls.
+      if (this.value(x, y) === 0) {
+        for (let i = neighbors.length - 1; i >= 0; i--) {
+          const neighbor = neighbors[i];
+          if (!neighbor.isOpen && !neighbor.isFlagged)
+            pending.push(neighbor);
         }
       }
     }
+    return changed;
+  }
 
-    return openedCells;
+  private chordOpen(cell: Cell, pending: OpenTarget[], changed: Cell[]) {
+    const neighbors = this.getNeighbors(cell.x, cell.y);
+    const closedUnflagged = neighbors.filter(
+      (neighbor) => !neighbor.isOpen && !neighbor.isFlagged,
+    );
+    const value = this.value(cell.x, cell.y);
+    const knownMines = neighbors.filter(
+      (neighbor) => neighbor.isFlagged || (neighbor.isOpen && neighbor.isMine),
+    );
+    if (knownMines.length === value) {
+      for (let i = closedUnflagged.length - 1; i >= 0; i--) {
+        const { x, y } = closedUnflagged[i];
+        pending.push({ x, y, chordIfOpened: true });
+      }
+    } else {
+      const closed = neighbors.filter(
+        (neighbor) => !neighbor.isOpen || neighbor.isMine,
+      );
+      if (closed.length === value) {
+        for (const { x, y } of closedUnflagged) changed.push(...this.flag(x, y));
+      }
+    }
   }
 
   /**
@@ -307,11 +282,14 @@ export class Field extends PIXI.EventEmitter {
   public _setCell(x: number, y: number, cell: Partial<Cell>) {
     const gottenCell = this.cellData.get(x, y);
     const oldMine = !!gottenCell.isMine;
+    const before = observeCell(gottenCell);
     if (cell.isMine !== undefined) gottenCell.isMine = cell.isMine;
     if (cell.isFlagged !== undefined) gottenCell.isFlagged = cell.isFlagged;
     if (cell.isOpen !== undefined) gottenCell.isOpen = cell.isOpen;
     this.cellData.set(x, y, gottenCell);
     this.emit("cellStored", {x, y});
+    const after = observeCell(gottenCell);
+    if (before !== after) this.emit("observationChanged", x, y, before, after);
     if (oldMine !== !!gottenCell.isMine) this.emit("mineGenerated", {x, y});
   }
 }

@@ -99,8 +99,14 @@ export class ProbabilityOverlay {
     let lastPaintRevision = -1;
     let markers: { x: number; y: number; p: number; key: string }[] = [];
     const invalid = new Set<string>();
+    let invalidAll = false;
     field.on("cellChanged", (cell: { x: number; y: number }) => {
-      if (preview.background) return;
+      if (preview.background || invalidAll) return;
+      if (document.hidden) {
+        invalid.clear();
+        invalidAll = true;
+        return;
+      }
       // A changed cell affects neighboring clues and their adjacent unknowns.
       // Invalidate the live tooltip; visual estimates remain until replaced atomically.
       for (let dy = -2; dy <= 2; dy++)
@@ -174,6 +180,7 @@ export class ProbabilityOverlay {
         snapshot = preview.result;
         previewVersion = preview.version;
         invalid.clear();
+        invalidAll = false;
         markers = [...snapshot.risks]
           .map(([key, p]) => {
             const [x, y] = key.split(",").map(Number);
@@ -299,7 +306,7 @@ export class ProbabilityOverlay {
           ? "Opened"
           : c?.isFlagged
             ? "Assumed mine (flagged)"
-            : invalid.has(key) || preview.isInvalid(key)
+            : invalidAll || invalid.has(key) || preview.isInvalid(key)
               ? "Updating · previous estimate (not a current proof)"
               : snapshot.approximate.has(key)
                 ? "Approximate estimate"

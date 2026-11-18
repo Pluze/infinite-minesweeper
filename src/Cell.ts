@@ -28,3 +28,18 @@ export class Cell {
     return open + mine + flagged;
   }
 }
+
+export const Observation = {
+  Open: 1,
+  Flagged: 2,
+  Detonated: 4,
+} as const;
+
+/** A closed, unflagged cell contributes nothing, regardless of its mine state. */
+export function observeCell(cell: Cell): number {
+  return (
+    (cell.isOpen ? Observation.Open : 0) |
+    (cell.isFlagged ? Observation.Flagged : 0) |
+    (cell.isOpen && cell.isMine ? Observation.Detonated : 0)
+  );
+}
