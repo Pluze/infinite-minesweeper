@@ -1,12 +1,23 @@
 import { defineConfig } from "@playwright/test";
 
+const configuredBrowser = process.env.PLAYWRIGHT_BROWSER;
+const browserName =
+  configuredBrowser === "firefox" || configuredBrowser === "webkit"
+    ? configuredBrowser
+    : "chromium";
+
 export default defineConfig({
   testDir: "./e2e",
   testMatch: "**/*.browser.ts",
   use: {
     baseURL: "http://127.0.0.1:5180",
-    channel: process.env.PLAYWRIGHT_CHANNEL || undefined,
-    launchOptions: { args: ["--enable-unsafe-swiftshader"] },
+    browserName,
+    channel:
+      browserName === "chromium" ? process.env.PLAYWRIGHT_CHANNEL : undefined,
+    launchOptions:
+      browserName === "chromium"
+        ? { args: ["--enable-unsafe-swiftshader"] }
+        : undefined,
     viewport: { width: 1000, height: 760 },
   },
   webServer: {

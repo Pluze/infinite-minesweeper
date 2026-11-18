@@ -195,6 +195,54 @@ test.describe("Retina wheel ticks", () => {
   });
 });
 
+test("line, page and single or fixed pixel wheel steps zoom across browsers", async ({
+  page,
+}) => {
+  await startBoard(page, { x: 400, y: 340, k: 1 });
+  const wheel = (
+    samples: { y: number; mode: number; ticks?: number; delay?: number }[],
+  ) =>
+    page.locator("#minefield").evaluate((canvas, events) => {
+      const start = performance.now();
+      for (const { y, mode, ticks, delay } of events) {
+        const event = new WheelEvent("wheel", {
+          deltaMode: mode,
+          deltaY: y,
+          clientX: 500,
+          clientY: 340,
+          cancelable: true,
+        });
+        Object.defineProperties(event, {
+          wheelDeltaY: { value: ticks },
+          timeStamp: { value: start + (delay ?? 0) },
+        });
+        canvas.dispatchEvent(event);
+      }
+    }, samples);
+
+  await wheel([{ mode: 1, y: -3 }]);
+  await expect
+    .poll(async () => (await camera(page)).k)
+    .toBeCloseTo(2 ** 0.15, 7);
+  await wheel([{ mode: 2, y: -1 }]);
+  await expect
+    .poll(async () => (await camera(page)).k)
+    .toBeCloseTo(2 ** 1.15, 7);
+  await wheel([{ mode: 0, y: -20.5 }]);
+  await expect
+    .poll(async () => (await camera(page)).k)
+    .toBeCloseTo(2 ** 1.191, 7);
+  await wheel([
+    { mode: 0, y: -12, ticks: 36 },
+    { mode: 0, y: -12, ticks: 36, delay: 8 },
+    { mode: 0, y: -12, ticks: 36, delay: 16 },
+  ]);
+  await expect
+    .poll(async () => (await camera(page)).k)
+    .toBeCloseTo(2 ** 1.263, 7);
+  await expect.poll(async () => (await camera(page)).y).toBeCloseTo(340, 7);
+});
+
 test("the recorded M575S burst zooms even with trackpad-like legacy tick ratios", async ({
   page,
 }) => {

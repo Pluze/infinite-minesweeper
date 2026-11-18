@@ -5,7 +5,6 @@ type ScrollEvent = WheelEvent & {
 };
 
 // Briefly sample an ambiguous vertical burst, as MapLibre does for scrolling.
-const WHEEL_DELTA = 4.000244140625;
 const SAMPLE_WINDOW_MS = 40;
 const LEGACY_NOTCH = 120;
 const LARGE_VERTICAL_STEP = 64;
@@ -62,10 +61,8 @@ export class WheelInput {
         ? lastPan
         : undefined;
     if (
-      deltaY % WHEEL_DELTA === 0 ||
-      this.isDiscreteNotch(event) ||
-      (magnitude >= LARGE_VERTICAL_STEP &&
-        (!continuingPan || magnitude > 2 * continuingPan.magnitude))
+      magnitude >= LARGE_VERTICAL_STEP &&
+      (!continuingPan || magnitude > 2 * continuingPan.magnitude)
     ) {
       this.dispatch("zoom", event);
       return;
@@ -96,20 +93,11 @@ export class WheelInput {
     // step. Only a sustained sequence of small vertical samples starts a pan.
     if (
       this.pending.length >= 3 &&
+      this.pending.some((sample) => sample.deltaY !== this.pending[0].deltaY) &&
       this.pending.some((sample) => !this.isWholeNotch(sample.wheelDeltaY))
     ) {
       this.flushPending("pan");
     }
-  }
-
-  private isDiscreteNotch(event: ScrollEvent) {
-    const ticks = event.wheelDeltaY;
-    return (
-      ticks !== undefined &&
-      ticks * event.deltaY < 0 &&
-      this.isWholeNotch(ticks) &&
-      Math.abs(ticks + 3 * event.deltaY) > 2
-    );
   }
 
   private isWholeNotch(ticks?: number) {
